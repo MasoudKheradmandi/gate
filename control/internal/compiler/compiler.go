@@ -1,0 +1,270 @@
+// Package compiler renders the stored configuration into a self-contained
+// OpenResty configuration directory (nginx.conf, hosts/*.conf, policy.json).
+// Every version directory references only its own files, so it can be tested
+// with `openresty -t` before it becomes live and kept for rollback.
+package compiler
+
+import (
+	"context"
+	"embed"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"text/template"
+
+	"corvus/control/internal/netcfg"
+	"corvus/control/internal/sigs"
+	"corvus/control/internal/store"
+	"corvus/control/internal/validate"
+)
+
+//go:embed templates/*.tmpl
+var templateFS embed.FS
+
+var tmpl = template.Must(template.New("").Funcs(template.FuncMap{
+	"join": strings.Join,
+	// rxpath turns a validated path (letters, digits, ._~/-) into a regex prefix.
+	"rxpath": func(p string) string {
+		p = strings.TrimRight(p, "/")
+		return strings.NewReplacer(".", `\.`).Replace(p)
+	},
+}).ParseFS(templateFS, "templates/*.tmpl"))
+
+// Paths are absolute locations inside the gateway container.
+type Paths struct {
+	DataDir     string // e.g. /data
+	LuaDir      string // e.g. /opt/corvus/lua
+	HTMLDir     string // e.g. /opt/corvus/html
+	MimeTypes   string // e.g. /usr/local/openresty/nginx/conf/mime.types
+	Resolver    string // DNS resolver for upstream names, e.g. 127.0.0.11 (Docker)
+	HTTPPort    int    // container port for HTTP (80)
+	HTTPSPort   int    // container port for HTTPS (443)
+	StatusPort  int    // loopback-only status port used to confirm reloads (9180)
+	ACMEPort    int    // loopback port where corvus-control answers HTTP-01 challenges (9181)
+	DefaultCert string // directory holding the default fullchain.pem/privkey.pem
+}
+
+// CertDir is where certificate files for a certificate id live.
+func (p Paths) CertDir(id int64) string {
+	return filepath.ToSlash(filepath.Join(p.DataDir, "certs", fmt.Sprint(id)))
+}
+
+type Compiler struct {
+	P Paths
+	// Cloudflare returns the trusted Cloudflare edge ranges (IPv4 + IPv6).
+	Cloudflare func(ctx context.Context, s *store.Store) []string
+	// Bundle returns the active managed rule bundle (body signatures); nil = built-in.
+	Bundle func() *sigs.Bundle
+}
+
+type hostView struct {
+	store.ProxyHost
+	Room            *store.Waitroom
+	CertDir         string
+	HasRootLocation bool
+	Upstream        string
+	RateLimit       *store.RateLimit
+	Access          *store.AccessList
+	AccessFile      string
+	Cloudflare      []string
+	TrustedProxies  []string
+	RealIPHeader    string
+	P               Paths
+}
+
+type mainView struct {
+	Dir        string
+	Name       string // version directory name, served on the status port
+	P          Paths
+	Hosts      int
+	RateLimits []store.RateLimit
+}
+
+type policyRoom struct {
+	Capacity  int    `json:"capacity"`
+	ActiveTTL int    `json:"active_ttl"`
+	GrantTTL  int    `json:"grant_ttl"`
+	QueueTTL  int    `json:"queue_ttl"`
+	Refresh   int    `json:"refresh"`
+	AdmitRate int    `json:"admit_rate"`
+	Fail      string `json:"fail"`
+	MaxQueue  int    `json:"max_queue"`
+	MaxNewIP  int    `json:"max_new_per_ip"`
+	BindIP    bool   `json:"bind_ip"`
+}
+
+// Render writes a complete configuration into dir (which must not exist yet).
+func (c *Compiler) Render(ctx context.Context, s *store.Store, dir string) error {
+	hosts, err := s.ListProxyHosts(ctx)
+	if err != nil {
+		return err
+	}
+	rooms, err := s.ListWaitrooms(ctx)
+	if err != nil {
+		return err
+	}
+	byID := map[int64]*store.Waitroom{}
+	policy := map[string]map[string]policyRoom{"waitrooms": {}}
+	for i := range rooms {
+		r := &rooms[i]
+		byID[r.ID] = r
+		// Every room is published so status endpoints keep working while a room is disabled.
+		rc := *r
+		if err := validate.Waitroom(&rc); err != nil {
+			return fmt.Errorf("access queue %d: %w", r.ID, err)
+		}
+		policy["waitrooms"][r.Name] = policyRoom{r.Capacity, r.ActiveTTL, r.GrantTTL, r.QueueTTL, r.Refresh, r.AdmitRate, r.FailMode, r.MaxQueue, r.MaxNewIP, r.BindIP}
+	}
+
+	limits, err := s.ListRateLimits(ctx)
+	if err != nil {
+		return err
+	}
+	limitByID := map[int64]*store.RateLimit{}
+	var enabledLimits []store.RateLimit
+	for i := range limits {
+		rc := limits[i]
+		if err := validate.RateLimit(&rc); err != nil {
+			return fmt.Errorf("rate limit %d: %w", limits[i].ID, err)
+		}
+		if _, err := netcfg.NormalizeTrustedCIDRs(limits[i].ExemptCIDRs); err != nil {
+			return fmt.Errorf("rate limit %d: %w", limits[i].ID, err)
+		}
+		if limits[i].Enabled {
+			limitByID[limits[i].ID] = &limits[i]
+			enabledLimits = append(enabledLimits, limits[i])
+		}
+	}
+	acls, err := s.ListAccessLists(ctx)
+	if err != nil {
+		return err
+	}
+	aclByID := map[int64]*store.AccessList{}
+	for i := range acls {
+		if len(acls[i].Users) == 0 {
+			continue // nothing to enforce (IP rules live in security rules)
+		}
+		ac := acls[i]
+		if err := validate.AccessList(&ac); err != nil {
+			return fmt.Errorf("access list %d: %w", acls[i].ID, err)
+		}
+		for _, u := range acls[i].Users {
+			if strings.ContainsAny(u.PasswordHash, ":\n\r") || !strings.HasPrefix(u.PasswordHash, "$apr1$") {
+				return fmt.Errorf("access list %d: invalid password hash", acls[i].ID)
+			}
+		}
+		aclByID[acls[i].ID] = &acls[i]
+	}
+	network, err := s.Network(ctx)
+	if err != nil {
+		return err
+	}
+	if _, err := netcfg.NormalizeTrustedCIDRs(network.TrustedProxies); err != nil {
+		return fmt.Errorf("network settings: %w", err)
+	}
+	if !validate.RealIPHeader(network.RealIPHeader) {
+		return fmt.Errorf("network settings: invalid real IP header")
+	}
+	var cf []string
+	if c.Cloudflare != nil {
+		cf = c.Cloudflare(ctx, s)
+	}
+
+	for _, d := range []string{"hosts", "access"} {
+		if err := os.MkdirAll(filepath.Join(dir, d), 0o755); err != nil {
+			return err
+		}
+	}
+	slash := filepath.ToSlash(dir)
+
+	rules, err := c.rulePolicy(ctx, s, hosts)
+	if err != nil {
+		return err
+	}
+
+	n := 0
+	for _, h := range hosts {
+		if !h.Enabled {
+			continue
+		}
+		// Defense in depth: never render a host that would not pass validation.
+		hc := h
+		if err := validate.ProxyHost(&hc); err != nil {
+			return fmt.Errorf("proxy host %d: %w", h.ID, err)
+		}
+		v := hostView{ProxyHost: hc, P: c.P, HasRootLocation: validate.HasRootLocation(hc.AdvancedConfig), Upstream: hc.ForwardHost}
+		// TLS is enabled once the certificate files exist (an ACME order may still be pending).
+		if hc.CertificateID != nil {
+			dir := c.P.CertDir(*hc.CertificateID)
+			if _, err := os.Stat(filepath.Join(filepath.FromSlash(dir), "fullchain.pem")); err == nil {
+				v.CertDir = dir
+			}
+		}
+		if hc.WaitroomID != nil {
+			if r := byID[*hc.WaitroomID]; r != nil && r.Enabled {
+				v.Room = r
+			}
+		}
+		if hc.RateLimitID != nil {
+			v.RateLimit = limitByID[*hc.RateLimitID]
+		}
+		if hc.AccessListID != nil {
+			if a := aclByID[*hc.AccessListID]; a != nil {
+				v.Access = a
+				if len(a.Users) > 0 {
+					file := filepath.Join(dir, "access", fmt.Sprintf("%d.htpasswd", a.ID))
+					if err := writeHtpasswd(file, a.Users); err != nil {
+						return err
+					}
+					v.AccessFile = filepath.ToSlash(file)
+				}
+			}
+		}
+		switch hc.ClientIP {
+		case "cloudflare":
+			v.Cloudflare = cf
+		case "trusted_proxies":
+			v.TrustedProxies, v.RealIPHeader = network.TrustedProxies, network.RealIPHeader
+		}
+		if err := writeTemplate(filepath.Join(dir, "hosts", fmt.Sprintf("%d.conf", h.ID)), "host.conf.tmpl", v); err != nil {
+			return err
+		}
+		n++
+	}
+
+	rj, _ := json.Marshal(rules)
+	if err := os.WriteFile(filepath.Join(dir, "rules.json"), rj, 0o644); err != nil {
+		return err
+	}
+	pj, _ := json.MarshalIndent(policy, "", "  ")
+	if err := os.WriteFile(filepath.Join(dir, "policy.json"), pj, 0o644); err != nil {
+		return err
+	}
+	return writeTemplate(filepath.Join(dir, "nginx.conf"), "nginx.conf.tmpl", mainView{Dir: slash, Name: filepath.Base(dir), P: c.P, Hosts: n, RateLimits: enabledLimits})
+}
+
+func writeTemplate(path, name string, data any) error {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	if err := tmpl.ExecuteTemplate(f, name, data); err != nil {
+		f.Close()
+		return fmt.Errorf("render %s: %w", name, err)
+	}
+	return f.Close()
+}
+
+// writeHtpasswd writes an nginx auth_basic user file (hashes are $apr1$).
+func writeHtpasswd(path string, users []store.AccessListUser) error {
+	if _, err := os.Stat(path); err == nil {
+		return nil // shared by several hosts
+	}
+	var b strings.Builder
+	for _, u := range users {
+		b.WriteString(u.Username + ":" + u.PasswordHash + "\n")
+	}
+	return os.WriteFile(path, []byte(b.String()), 0o644)
+}

@@ -1,0 +1,8 @@
+# DS-0002 "no USER in Dockerfile": intentional. The entrypoint (deploy/entrypoint.sh) starts as
+# root only to take ownership of a bind-mounted ./data, then drops to uid 10001 with su-exec
+# before any service starts (same pattern as the official postgres/redis images). Every
+# process — control plane, nginx, Valkey — runs as 10001. The hardened compose runs the
+# container as user 10001 from the start.
+DS002
+AVD-DS-0002
+DS-0002

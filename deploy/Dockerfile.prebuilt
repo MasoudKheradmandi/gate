@@ -1,0 +1,22 @@
+# Development image from artifacts built elsewhere (low-memory dev servers):
+#   bin/corvus-control-linux   GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o bin/corvus-control-linux ./control/cmd/corvus-control
+#   bin/openresty.tar.gz    output of deploy/openresty/build.sh (tar of /usr/local/openresty)
+FROM alpine:3.24
+RUN apk upgrade --no-cache && apk add --no-cache libgcc ca-certificates tzdata su-exec valkey
+ADD bin/openresty.tar.gz /
+COPY gateway/lua/   /opt/corvus/lua/
+COPY gateway/redis/ /opt/corvus/redis/
+COPY gateway/html/  /opt/corvus/html/
+COPY --chmod=0755 deploy/entrypoint.sh /usr/local/bin/corvus-entrypoint
+COPY --chmod=0755 bin/corvus-control-linux /usr/local/bin/corvus-control
+ENV PATH=/usr/local/openresty/bin:/usr/local/openresty/nginx/sbin:$PATH CORVUS_DATA_DIR=/data
+# Unprivileged runtime user (H9): control plane, nginx and the embedded Valkey all run as
+# uid 10001. The entrypoint starts as root only to fix the owner of a bind-mounted /data,
+# then drops privileges (or runs directly under `user: "10001:10001"`).
+RUN addgroup -S -g 10001 corvus && adduser -S -D -H -u 10001 -G corvus -s /sbin/nologin corvus  && mkdir -p /data /redis-auth && chown corvus:corvus /data /redis-auth
+VOLUME ["/data"]
+EXPOSE 80 443 9443
+HEALTHCHECK --interval=15s --timeout=3s --start-period=20s \
+  CMD wget -q -O /dev/null http://127.0.0.1:9180/healthz || exit 1
+STOPSIGNAL SIGTERM
+ENTRYPOINT ["/usr/local/bin/corvus-entrypoint"]

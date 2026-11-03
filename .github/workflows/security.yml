@@ -1,0 +1,86 @@
+# Edge security watch:
+#  - weekly: are OpenResty / OpenSSL / PCRE2 / zlib still the newest upstream releases?
+#  - weekly + on main: build the image, scan it (OS packages + binaries), publish an SBOM.
+name: security
+on:
+  push:
+    branches: [main]
+    paths: ["deploy/**", "gateway/**", "control/**", "web/package-lock.json", "go.sum"]
+  schedule:
+    - cron: "17 2 * * 1"     # Mondays 02:17 UTC
+  workflow_dispatch:
+permissions:
+  contents: read
+
+jobs:
+  upstream:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - id: check
+        run: |
+          set +e
+          sh deploy/openresty/check-upstream.sh | tee upstream.txt
+          echo "stale=$?" >> "$GITHUB_OUTPUT"
+      - name: Open an issue when a pinned component is out of date
+        if: steps.check.outputs.stale != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="Security: upstream update available for the OpenResty build"
+          if ! gh issue list --state open --search "$title in:title" --json number -q '.[0]' | grep -q .; then
+            { echo "deploy/openresty/check-upstream.sh reports:"; echo '```'; cat upstream.txt; echo '```';
+              echo "Update versions + SHA-256 in deploy/openresty/build.sh."; } > body.md
+            gh issue create --title "$title" --body-file body.md --label security || gh issue create --title "$title" --body-file body.md
+          fi
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: deploy/Dockerfile
+          load: true
+          tags: corvus/gateway:scan
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Scan image (fail on fixable HIGH/CRITICAL)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: corvus/gateway:scan
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: SBOM (CycloneDX)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: corvus/gateway:scan
+          format: cyclonedx
+          output: corvus-gateway.cdx.json
+          skip-setup-trivy: true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sbom
+          path: corvus-gateway.cdx.json
+
+  config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - name: Misconfiguration scan (Dockerfiles, compose)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: config
+          scan-ref: deploy
+          severity: HIGH,CRITICAL
+          exit-code: "1"

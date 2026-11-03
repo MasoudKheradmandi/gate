@@ -1,0 +1,84 @@
+# Corvus on the shared development server (prebuilt binary, test ports, demo backend).
+# Ports: 8081→80 (HTTP), 8443→443 (HTTPS), 9443 (admin UI). Debug endpoints enabled for corvus-loadtest.
+name: corvus-dev
+
+# Same hardening as the install compose (non-root, read-only, no capabilities, Redis ACL).
+x-hardening: &hardening
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  restart: unless-stopped
+
+services:
+  corvus:
+    <<: *hardening
+    build:
+      context: ../..
+      dockerfile: deploy/Dockerfile.prebuilt
+    image: corvus/gateway:dev
+    user: "10001:10001"   # hardened: no root entrypoint step (cap_drop ALL)
+    ports:
+      - "8081:80"
+      - "8443:443"
+      - "9443:9443"
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: 0
+    tmpfs:
+      - /tmp:size=128m,mode=1777,noexec,nosuid,nodev
+    environment:
+      CORVUS_REDIS_HOST: redis
+      CORVUS_REDIS_ACL_FILE: /redis-auth/users.acl
+      CORVUS_DEBUG_ENDPOINTS: "1"
+      CORVUS_ADMIN_HOSTS: ${CORVUS_ADMIN_HOSTS:-}
+      # Test-only: issue certificates from the local Pebble ACME server.
+      CORVUS_ACME_DIRECTORY: https://pebble:14000/dir
+      # Only *.corvus.test certificates use Pebble; real domains go to Let's Encrypt.
+      CORVUS_ACME_DIRECTORY_SUFFIX: .corvus.test
+      LEGO_CA_CERTIFICATES: /etc/corvus/pebble-ca.pem
+    volumes:
+      - corvus-data:/data
+      - redis-auth:/redis-auth
+      - ./import:/import:ro            # NPM import test fixture
+      - ./pebble-ca.pem:/etc/corvus/pebble-ca.pem:ro
+    mem_limit: 256m
+
+  redis:
+    <<: *hardening
+    image: redis:7.4-alpine
+    user: "999:1000"
+    depends_on:
+      corvus:
+        condition: service_started
+    command:
+      - sh
+      - -c
+      - until [ -s /redis-auth/users.acl ]; do sleep 1; done;
+        exec redis-server --aclfile /redis-auth/users.acl --protected-mode no --save "" --appendonly no
+        --maxmemory 128mb --maxmemory-policy noeviction
+    volumes:
+      - redis-auth:/redis-auth:ro
+    mem_limit: 160m
+    healthcheck:
+      test: ["CMD", "redis-cli", "--no-auth-warning", "--user", "health", "--pass", "-", "ping"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
+
+  # Let's Encrypt's test ACME server (validation skipped) for issuance tests.
+  pebble:
+    image: ghcr.io/letsencrypt/pebble:2.8.0
+    environment:
+      PEBBLE_VA_ALWAYS_VALID: "1"
+      PEBBLE_WFE_NONCEREJECT: "0"
+    mem_limit: 64m
+    restart: unless-stopped
+
+  # Demo origin used by integration tests (echoes request info).
+  demo:
+    image: traefik/whoami:v1.10.3
+    mem_limit: 32m
+    restart: unless-stopped
+
+volumes:
+  corvus-data:
+  redis-auth:

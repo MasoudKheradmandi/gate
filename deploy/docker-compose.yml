@@ -1,0 +1,22 @@
+# Corvus AWPG — install
+#   docker compose up -d
+#   docker compose logs corvus | grep setup_token     # one-time token for the first login
+#   open https://<server>:9443
+#
+# Upgrade:
+#   docker compose pull && docker compose up -d
+#
+# Everything (gateway, admin console, access-queue store) runs in this one container and
+# keeps its state in ./data — back it up, especially ./data/secrets.
+# For a locked-down variant (read-only filesystem, no capabilities) see
+# docker-compose.hardened.yml.
+services:
+  corvus:
+    image: ghcr.io/corvus-gateway/gateway:latest
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "9443:9443"   # admin console — allow only trusted networks
+    volumes:
+      - ./data:/data

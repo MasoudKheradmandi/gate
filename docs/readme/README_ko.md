@@ -1,0 +1,228 @@
+<div align="center">
+
+[English](../../README.md) · **한국어** · [简体中文](README_zh.md) · [日本語](README_ja.md) · [Русский](README_ru.md) · [Français](README_fr.md) · [Deutsch](README_de.md) · [Español](README_es.md)
+
+<br>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../../assets/brand/corvus-logo-dark.svg">
+  <img src="../../assets/brand/corvus-logo.svg" alt="Corvus" width="420">
+</picture>
+
+### Active Web Protection Gateway
+
+<a href="https://github.com/corvus-gateway/corvus/releases/latest"><img src="https://img.shields.io/github/v/release/corvus-gateway/corvus?label=version&color=2ea44f&style=for-the-badge"></a>
+<a href="../../LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg?style=for-the-badge"></a>
+<a href="https://github.com/corvus-gateway/corvus/pkgs/container/gateway"><img src="https://img.shields.io/badge/ghcr.io-corvus--gateway%2Fgateway-24292f.svg?style=for-the-badge&logo=docker&logoColor=white"></a>
+<a href="https://github.com/corvus-gateway/corvus/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/corvus-gateway/corvus/ci.yml?branch=main&label=CI&style=for-the-badge"></a>
+
+<img src="https://img.shields.io/badge/OpenResty-1.31-00b140?style=flat-square">
+<img src="https://img.shields.io/badge/Go-1.26-00add8?style=flat-square&logo=go&logoColor=white">
+<img src="https://img.shields.io/badge/React-18-61dafb?style=flat-square&logo=react&logoColor=black">
+<img src="https://img.shields.io/badge/i18n-8_languages-8250df?style=flat-square">
+<img src="https://img.shields.io/badge/platform-amd64_|_arm64-555?style=flat-square&logo=docker&logoColor=white">
+<a href="https://scorecard.dev/viewer/?uri=github.com/corvus-gateway/corvus"><img src="https://api.scorecard.dev/projects/github.com/corvus-gateway/corvus/badge?style=flat-square"></a>
+
+</div>
+
+Corvus는 웹 서비스 앞단에 두는 셀프 호스팅 게이트웨이입니다. Nginx Proxy Manager만큼 운영이
+쉬워서 도메인, 포워딩, 무료 SSL을 몇 번의 클릭으로 설정할 수 있으며, 여기에 더해 통과하는
+트래픽을 **감시하고, 보호하고, 제어**합니다. 실시간 모니터링, 공격 차단, 속도 제한(Rate Limit),
+트래픽 급증에 대비한 접속 대기열까지 제공합니다. 모든 것이 여러분의 서버에서 동작하며, 트래픽이
+외부 클라우드로 전송되지 않습니다.
+
+- [빠른 설정](#빠른-설정)
+- [전체 설정](#전체-설정)
+- [스크린샷](#스크린샷)
+
+## 프로젝트 목표
+
+작은 팀은 대개 TLS용 리버스 프록시 하나, 제대로 튜닝해 본 적 없는 별도의 WAF 하나를 두고, 서비스
+오픈이나 공격이 닥쳤을 때 무슨 일이 벌어지는지는 알지 못한 채 지냅니다. Corvus는 이 모든 것을
+안전한 기본값과 함께 하나의 상자에 담았습니다. 호스트를 추가하는 순간 규칙을 한 줄도 쓰지 않아도
+기본적인 공격 탐지가 동작하고, 고급 옵션은 모두 선택 사항으로 남아 있습니다. 5분 만에 설치할 수
+있고, 트래픽이 열 배로 늘어나는 날에도 믿고 맡길 수 있는 게이트웨이를 목표로 합니다.
+
+Corvus는 Nginx Proxy Manager의 포크가 아닙니다. 기존 NPM 설정을 **가져올 수 있는** 새로운
+구현체(OpenResty 데이터 플레인, Go 컨트롤 플레인, React 콘솔)입니다.
+
+## 주요 기능
+
+**프록시 및 TLS**
+- 와일드카드, WebSocket, HTTP/2, HTTPS 강제 전환, 사용자 정의 Nginx 스니펫을 지원하는 프록시 호스트
+- 자동 갱신되는 무료 Let's Encrypt 인증서(HTTP-01, 또는 Cloudflare를 통한 DNS-01) 또는 직접 업로드한 인증서
+- Cloudflare 또는 신뢰할 수 있는 프록시 뒤에서도 실제 클라이언트 IP 확인, 호스트별 비밀번호 보호(선택)
+- 모든 변경은 `openresty -t`로 검증하고, 원자적으로 적용하며, 롤백할 수 있습니다
+
+**Corvus Sentinel — 보안 엔진**
+- 보안 규칙: IP, IP 목록, 국가, 경로, 쿼리, 메서드, 헤더를 매칭하여 차단·허용·기록, 전역 또는 호스트별 적용
+- JSON, 폼, multipart 요청 본문 검사(기록 또는 차단)
+- 최신 CVE(React2Shell, wp2shell, PHP-CGI, Vite, n8n …)에 대한 원클릭 **가상 패치**
+- 서명되어 있고 더 최신인 경우에만 적용하는 관리형 시그니처 업데이트(변조 및 다운그레이드 방지)
+- 반복 위반자에 대한 자동 IP 차단(단계적 가중 및 예외 지정 지원)
+- 드라이런 모드를 갖춘 속도 제한, 기본으로 제공되는 익스플로잇 경로 차단
+
+**접속 대기열(Access Queue)**
+- 수용 한도까지만 방문자를 입장시키고, 트래픽이 몰리면 나머지는 공정하게 대기열에 세웁니다
+- 입장 속도, fail-open / fail-closed 정책, 실시간 입장/대기 인원, 긴급 해제
+- 8개 언어로 현지화된 대기 페이지
+
+**모니터링 및 알림**
+- 실시간 초당 요청 수, 상태 코드, p50/p95/p99 지연 시간, 호스트별·경로별 분석
+- 요청 로그 검색과 CSV/JSON 내보내기, 보안 이벤트, 보존 기간과 로그 로테이션을 갖춘 영구 이력
+- Slack, Mattermost, Discord, Teams, Telegram 또는 서명된 웹훅으로 알림 전송
+- Prometheus `/metrics`
+
+**관리**
+- 역할, MFA(TOTP + 복구 코드), OIDC 싱글 사인온, API 토큰
+- 관리 콘솔 IP 허용 목록, 감사 로그, 배포 이력
+- 기본 SQLite 또는 PostgreSQL, 라이트/다크 테마를 지원하는 8개 언어 관리 콘솔
+
+**기본값부터 견고하게**
+- 읽기 전용 루트 파일시스템과 Linux capability 없이 비루트로 실행되는 컨테이너
+- 자동 생성된 비밀번호와 최소 ACL로 보호되는 Redis
+- 서명 검증을 거친 소스로 빌드한 OpenResty
+
+## 스크린샷
+
+<p align="center">
+  <img src="../../assets/screenshots/dashboard.png" alt="Dashboard" width="900">
+</p>
+
+| 트래픽 관제 | 보안 규칙 |
+|:---:|:---:|
+| <img src="../../assets/screenshots/traffic.png" alt="Traffic monitor"> | <img src="../../assets/screenshots/security-rules.png" alt="Security rules"> |
+| **프록시 호스트** | **접속 대기열** |
+| <img src="../../assets/screenshots/proxy-host.png" alt="Proxy host"> | <img src="../../assets/screenshots/access-queues.png" alt="Access queues"> |
+
+## 빠른 설정
+
+1. Compose 플러그인이 포함된 [Docker를 설치](https://docs.docker.com/engine/install/)합니다.
+2. 다음과 같은 `docker-compose.yml` 파일을 만듭니다.
+
+```yml
+services:
+  corvus:
+    image: 'ghcr.io/corvus-gateway/gateway:latest'
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+      - '9443:9443'
+    volumes:
+      - ./data:/data
+```
+
+이것이 설치의 전부입니다. 게이트웨이, 관리 콘솔, 접속 대기열 저장소가 이 컨테이너 하나에서
+실행됩니다. 옵션은 [전체 설정](#전체-설정)을 참고하세요.
+
+3. 스택을 시작합니다.
+
+```bash
+docker compose up -d
+```
+
+4. 일회용 설정 토큰을 확인합니다.
+
+```bash
+docker compose logs corvus | grep setup_token
+```
+
+5. `https://<your-server>:9443`에서 관리 콘솔에 로그인하고, 토큰을 입력한 뒤 첫 번째 관리자를
+   만듭니다. 직접 인증서를 설정하기 전까지 콘솔은 자체 서명 인증서를 사용합니다.
+
+> [!TIP]
+> 도메인의 DNS를 서버로 향하게 한 뒤 프록시 호스트를 추가하고, 같은 폼에서 Let's Encrypt
+> 인증서를 발급받으세요.
+
+### 업그레이드
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+`./data`에 있는 설정, 인증서, 이력은 그대로 유지되며, 데이터베이스 변경 사항은 시작할 때
+자동으로 적용됩니다.
+
+## 전체 설정
+
+### 포트
+
+| 포트 | 용도 |
+|---|---|
+| 80 / 443 | 게이트웨이 — 프록시 트래픽 |
+| 9443 | 관리 콘솔 및 API — 신뢰할 수 있는 네트워크만 허용하세요(방화벽, 또는 *네트워크 → 관리 콘솔 접근 허용 네트워크*) |
+
+### 데이터와 백업
+
+모든 상태는 `./data`에 저장됩니다. 설정 데이터베이스, 생성된 설정 이력, 인증서, 트래픽 이력,
+`secrets/`가 여기에 들어 있습니다. **`secrets/`는 반드시 백업하세요.** 데이터베이스에 저장된
+MFA 시크릿과 DNS 토큰을 암호화하는 키가 이곳에 있습니다. 컨테이너는 권한 없는 사용자
+`10001`로 실행되며, 처음 시작할 때 `./data`의 소유권을 가져옵니다.
+
+### 강화된 설치
+
+[`deploy/docker-compose.hardened.yml`](../../deploy/docker-compose.hardened.yml)은 같은 이미지를 읽기 전용 루트
+파일 시스템, Linux capability 없음, 권한 상승 불가 상태로 실행합니다. 먼저 사용자 `10001`용
+데이터 디렉터리를 만드세요.
+
+```bash
+mkdir -p data && sudo chown 10001:10001 data
+docker compose -f docker-compose.hardened.yml up -d
+```
+
+### 구성
+
+다음 변수는 `docker-compose.yml`의 `environment:` 아래에 설정합니다.
+
+| 변수 | 설명 |
+|---|---|
+| `CORVUS_ADMIN_HOSTS` | 관리 콘솔 인증서에 추가할 이름/IP. 예: `corvus.example.com,203.0.113.10` |
+| `CORVUS_DB_URL` | SQLite 대신 PostgreSQL 사용. 예: `postgres://corvus:…@db:5432/corvus` |
+| `CORVUS_REDIS_HOST` | 접속 대기열에 외부 Redis/Valkey 사용(여러 게이트웨이가 하나의 대기열을 공유). `CORVUS_REDIS_PASSWORD`와 함께 사용. 기본값: 내장 |
+| `CORVUS_IMPORT_DIR` | *NPM 가져오기*에 사용할 읽기 전용 NPM 볼륨이 있는 디렉터리 |
+| `CORVUS_RULES_URL` | 서명된 관리형 규칙 번들의 URL(선택) |
+| `CORVUS_ADMIN_ALLOW_ANY=1` | 관리자 허용 목록 설정 때문에 접속할 수 없게 되었을 때 쓰는 복구 스위치 |
+
+### Nginx Proxy Manager에서 마이그레이션
+
+NPM의 `data`와 `letsencrypt` 디렉터리를 읽기 전용으로 마운트하고 Corvus가 이를 가리키도록 설정합니다.
+
+```yml
+    environment:
+      CORVUS_IMPORT_DIR: /import
+    volumes:
+      - ./data:/data
+      - /path/to/npm/data:/import/npm/data:ro
+      - /path/to/npm/letsencrypt:/import/npm/letsencrypt:ro
+```
+
+그다음 콘솔에서 *NPM 가져오기*를 엽니다. 호스트, 인증서, 접근 목록이 그대로 옮겨집니다. 이후에는
+NPM을 중지해서 80/443 포트와 인증서 갱신을 두고 둘이 충돌하지 않도록 하세요.
+
+## 개발
+
+```bash
+npm --prefix web ci && npm --prefix web run build      # admin UI → embedded into the Go binary
+go test ./control/...                                   # unit tests
+go build -o bin/corvus-control ./control/cmd/corvus-control
+CORVUS_GATEWAY=0 CORVUS_ADMIN_TLS=0 CORVUS_DATA_DIR=./tmp bin/corvus-control   # console only, no OpenResty
+```
+
+| 경로 | 내용 |
+|---|---|
+| `gateway/` | 데이터 플레인: OpenResty + Lua (규칙, 본문 검사, 접속 대기열) |
+| `control/` | 컨트롤 플레인(Go): 설정 DB, 설정 생성, 배포/롤백, API |
+| `web/` | 관리 콘솔(React + Vite + TypeScript) |
+| `deploy/` | Dockerfile, 검증된 OpenResty 빌드, Compose 파일, 통합 테스트 |
+| `tools/` | 부하 테스트 및 규칙 번들 서명 도구 |
+
+## 보안
+
+취약점은 비공개로 제보해 주세요. 자세한 내용은 [SECURITY.md](../../SECURITY.md)를 참고하세요.
+
+## 라이선스
+
+[Apache License 2.0](../../LICENSE) © 2026 Jikwang Moon.
+IP-국가 매핑 데이터는 [DB-IP](https://db-ip.com)(CC BY 4.0)에서 제공합니다. [NOTICE](../../NOTICE)를 참고하세요.

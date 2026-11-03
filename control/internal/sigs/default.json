@@ -1,0 +1,129 @@
+{
+  "serial": 2026110301,
+  "version": "2026.11.03-1",
+  "published": "2026-11-03T00:00:00Z",
+  "signatures": [
+    { "id": "react2shell", "pattern": "\\$@?\\d*:(?:__proto__|constructor|prototype)(?::|$)|^resolved_model$|^\\$@\\d+$", "options": "joim",
+      "description": "React Server Components / Next.js Server Actions RCE payload (CVE-2025-55182)" },
+    { "id": "proto-pollution", "pattern": "^__proto__$|__proto__(?:\\]|\\.|\\[)|constructor(?:\\]?\\[|\\.)prototype", "options": "joim",
+      "description": "JavaScript prototype pollution via request keys" },
+    { "id": "php-object", "pattern": "(?:^|[^a-z0-9_])[oc]:\\d+:\"[a-z_\\\\][a-z0-9_\\\\]*\":\\d+:\\{", "options": "joim",
+      "description": "PHP serialized object (object injection)" },
+    { "id": "php-gadget", "pattern": "(?:illuminate|monolog|guzzlehttp|symfony|laminas|doctrine|phpggc)\\\\+[a-z]+\\\\+[a-z]", "options": "joim",
+      "description": "Common PHP gadget-chain class names" },
+    { "id": "craft-class", "pattern": "^__class$", "options": "joim",
+      "description": "Craft CMS object instantiation (CVE-2025-32432)" },
+    { "id": "php-upload-progress", "pattern": "^php_session_upload_progress$", "options": "joim",
+      "description": "PHP session upload-progress field (php2shell vector, CVE-2026-109618/109619)" },
+    { "id": "log4shell", "pattern": "\\$\\{(?:jndi|lower:|upper:|env:|sys:|\\$\\{)", "options": "joim",
+      "description": "Log4Shell-style lookups" },
+    { "id": "java-deser", "pattern": "(?:^|[^A-Za-z0-9+/])rO0AB[A-Za-z0-9+/]{8}|\\xac\\xed\\x00\\x05", "options": "jom",
+      "description": "Java serialized objects" }
+  ],
+  "templates": [
+    {
+      "id": "nextjs-middleware-bypass", "cves": ["CVE-2025-29927"], "severity": "critical", "products": "Next.js 11.1.4–15.2.2",
+      "title": { "en": "Next.js middleware authorization bypass", "ko": "Next.js 미들웨어 인증 우회" },
+      "description": { "en": "Blocks requests carrying the internal x-middleware-subrequest header. Corvus already strips this header before proxying; the rule also records attempts.", "ko": "내부용 헤더 x-middleware-subrequest가 포함된 요청을 차단합니다. Corvus는 이미 이 헤더를 제거해 전달하며, 이 규칙은 시도를 기록합니다." },
+      "false_positives": { "en": "None expected — clients never send this header.", "ko": "거의 없음 — 정상 클라이언트는 이 헤더를 보내지 않습니다." },
+      "groups": [[ { "field": "http.header", "name": "x-middleware-subrequest", "operator": "exists", "value": [] } ]]
+    },
+    {
+      "id": "react2shell", "cves": ["CVE-2025-55182"], "severity": "critical", "products": "React 19 RSC, Next.js 15/16 (sites WITHOUT Server Actions)",
+      "title": { "en": "React2Shell — block Server Action calls", "ko": "React2Shell — Server Action 호출 차단" },
+      "description": { "en": "Blocks POST requests with the Next-Action header. Use only on Next.js sites that do not use Server Actions; body inspection detects the payload itself on all sites.", "ko": "Next-Action 헤더가 있는 POST 요청을 차단합니다. Server Actions를 쓰지 않는 Next.js 사이트에만 쓰세요. 페이로드 자체는 본문 검사가 모든 사이트에서 탐지합니다." },
+      "false_positives": { "en": "Breaks Server Actions on sites that use them.", "ko": "Server Actions를 쓰는 사이트에서는 해당 기능이 동작하지 않습니다." },
+      "groups": [[ { "field": "http.method", "operator": "in", "value": ["POST"] }, { "field": "http.header", "name": "next-action", "operator": "exists", "value": [] } ]]
+    },
+    {
+      "id": "wp2shell", "cves": ["CVE-2026-63030", "CVE-2026-60137"], "severity": "critical", "products": "WordPress 6.8–7.0.1",
+      "title": { "en": "wp2shell — WordPress REST batch endpoint", "ko": "wp2shell — WordPress REST 배치 엔드포인트" },
+      "description": { "en": "Blocks the REST batch endpoint (/wp-json/batch/v1 and ?rest_route=/batch/v1) except from your admin network.", "ko": "관리자 네트워크를 제외하고 REST 배치 엔드포인트(/wp-json/batch/v1, ?rest_route=/batch/v1)를 차단합니다." },
+      "false_positives": { "en": "Some block-editor features use the batch API — exempt your admin IP list.", "ko": "블록 에디터 일부 기능이 배치 API를 씁니다 — 관리자 IP 목록을 예외로 지정하세요." },
+      "groups": [
+        [ { "field": "http.path", "operator": "contains", "value": ["/wp-json/batch/v1"], "ci": true }, { "field": "ip.src", "operator": "not_in", "value": ["{exempt}"] } ],
+        [ { "field": "http.query", "operator": "matches", "value": ["(?i)(?:^|&)rest_route=(?:/|%2f)*batch(?:/|%2f)+v1"] }, { "field": "ip.src", "operator": "not_in", "value": ["{exempt}"] } ]
+      ]
+    },
+    {
+      "id": "wordpress-lfi-pearcmd", "cves": ["CVE-2026-87902"], "severity": "critical", "products": "WordPress 4.7–7.1.1",
+      "title": { "en": "WordPress core LFI → RCE (pagename / pearcmd)", "ko": "WordPress 코어 LFI → RCE (pagename / pearcmd)" },
+      "description": { "en": "Blocks encoded path traversal in pagename and the pearcmd second stage.", "ko": "pagename의 인코딩된 경로 이동과 pearcmd 2단계 공격을 차단합니다." },
+      "false_positives": { "en": "Very low — legitimate slugs contain no dots.", "ko": "매우 낮음 — 정상 slug에는 점이 없습니다." },
+      "groups": [
+        [ { "field": "http.query", "operator": "matches", "value": ["(?i)(?:^|&)pagename=[^&]*(?:%2e|%252e|\\.\\.)"] } ],
+        [ { "field": "http.query", "operator": "contains", "value": ["pearcmd"], "ci": true } ],
+        [ { "field": "http.path", "operator": "contains", "value": ["pearcmd"], "ci": true } ]
+      ]
+    },
+    {
+      "id": "drupal-jsonapi", "cves": ["CVE-2026-9082"], "severity": "high", "products": "Drupal 8.9–11.3 on PostgreSQL",
+      "title": { "en": "Drupal JSON:API SQL injection — restrict JSON:API", "ko": "Drupal JSON:API SQL 인젝션 — JSON:API 제한" },
+      "description": { "en": "Blocks /jsonapi for everyone except your exempt network. Use when JSON:API does not need to be public.", "ko": "예외 네트워크를 제외하고 /jsonapi를 차단합니다. JSON:API를 외부에 공개할 필요가 없을 때 쓰세요." },
+      "false_positives": { "en": "Breaks public JSON:API consumers.", "ko": "외부에서 JSON:API를 쓰는 클라이언트가 동작하지 않습니다." },
+      "groups": [[ { "field": "http.path", "operator": "starts_with", "value": ["/jsonapi"], "ci": true }, { "field": "ip.src", "operator": "not_in", "value": ["{exempt}"] } ]]
+    },
+    {
+      "id": "craft-cms-transform", "cves": ["CVE-2025-32432"], "severity": "critical", "products": "Craft CMS 3/4/5",
+      "title": { "en": "Craft CMS generate-transform RCE", "ko": "Craft CMS generate-transform RCE" },
+      "description": { "en": "Blocks POSTs to the asset generate-transform action except from your admin network.", "ko": "관리자 네트워크를 제외하고 generate-transform 액션으로의 POST를 차단합니다." },
+      "false_positives": { "en": "Image transforms requested by editors outside the exempt network.", "ko": "예외 네트워크 밖에서 편집자가 요청하는 이미지 변환." },
+      "groups": [
+        [ { "field": "http.method", "operator": "in", "value": ["POST"] }, { "field": "http.query", "operator": "contains", "value": ["generate-transform"], "ci": true }, { "field": "ip.src", "operator": "not_in", "value": ["{exempt}"] } ],
+        [ { "field": "http.method", "operator": "in", "value": ["POST"] }, { "field": "http.path", "operator": "contains", "value": ["/actions/assets/generate-transform"], "ci": true }, { "field": "ip.src", "operator": "not_in", "value": ["{exempt}"] } ]
+      ]
+    },
+    {
+      "id": "magento-sessionreaper", "cves": ["CVE-2025-54236"], "severity": "critical", "products": "Adobe Commerce / Magento",
+      "title": { "en": "Magento SessionReaper upload path", "ko": "Magento SessionReaper 업로드 경로" },
+      "description": { "en": "Blocks the customer address file upload controller used to plant fake sessions.", "ko": "가짜 세션 파일을 올리는 데 쓰이는 고객 주소 파일 업로드 경로를 차단합니다." },
+      "false_positives": { "en": "Stores that use customer address file attributes.", "ko": "고객 주소 파일 속성을 쓰는 매장." },
+      "groups": [[ { "field": "http.path", "operator": "contains", "value": ["/customer/address_file/upload"], "ci": true } ]]
+    },
+    {
+      "id": "n8n-form-webhook", "cves": ["CVE-2026-21858"], "severity": "critical", "products": "n8n",
+      "title": { "en": "n8n form webhook content-type confusion", "ko": "n8n 폼 웹훅 Content-Type 혼동" },
+      "description": { "en": "Blocks JSON POSTs to n8n form endpoints (forms are submitted as form data).", "ko": "n8n 폼 엔드포인트로의 JSON POST를 차단합니다(정상 폼은 form 데이터로 전송됩니다)." },
+      "false_positives": { "en": "Custom integrations that post JSON to form URLs.", "ko": "폼 URL로 JSON을 보내는 자체 연동." },
+      "groups": [[ { "field": "http.method", "operator": "in", "value": ["POST"] }, { "field": "http.path", "operator": "matches", "value": ["^/form(?:-test|-waiting)?/"] }, { "field": "http.header", "name": "content-type", "operator": "contains", "value": ["json"], "ci": true } ]]
+    },
+    {
+      "id": "wp-plugin-gutenkit-hunk", "cves": ["CVE-2024-9234", "CVE-2024-9707", "CVE-2024-11972"], "severity": "critical", "products": "WordPress GutenKit, Hunk Companion",
+      "title": { "en": "WordPress GutenKit / Hunk Companion plugin install", "ko": "WordPress GutenKit / Hunk Companion 플러그인 설치 취약점" },
+      "description": { "en": "Blocks the unauthenticated plugin-install REST routes abused in mass attacks.", "ko": "대량 공격에 악용된 비인증 플러그인 설치 REST 경로를 차단합니다." },
+      "false_positives": { "en": "None expected.", "ko": "거의 없음." },
+      "groups": [
+        [ { "field": "http.path", "operator": "contains", "value": ["/wp-json/gutenkit/v1/install-active-plugin"], "ci": true } ],
+        [ { "field": "http.path", "operator": "contains", "value": ["/wp-json/hc/v1/themehunk-import"], "ci": true } ],
+        [ { "field": "http.query", "operator": "matches", "value": ["(?i)rest_route=(?:/|%2f)*(?:gutenkit(?:/|%2f)+v1(?:/|%2f)+install-active-plugin|hc(?:/|%2f)+v1(?:/|%2f)+themehunk-import)"] } ]
+      ]
+    },
+    {
+      "id": "vite-dev-server", "cves": ["CVE-2025-30208", "CVE-2025-31125"], "severity": "high", "products": "Vite dev server exposed with --host",
+      "title": { "en": "Vite dev server arbitrary file read", "ko": "Vite 개발 서버 임의 파일 읽기" },
+      "description": { "en": "Blocks /@fs/ paths and ?raw?? / ?inline=…? tricks used to read files through an exposed dev server.", "ko": "노출된 개발 서버로 파일을 읽는 /@fs/ 경로와 ?raw??, ?inline=…? 기법을 차단합니다." },
+      "false_positives": { "en": "Only affects development servers.", "ko": "개발 서버에만 영향이 있습니다." },
+      "groups": [
+        [ { "field": "http.path", "operator": "starts_with", "value": ["/@fs/"] } ],
+        [ { "field": "http.query", "operator": "matches", "value": ["(?i)(?:^|[&?])(?:raw|inline)(?:=[^&?]*)?\\?"] } ]
+      ]
+    },
+    {
+      "id": "php-cgi-argument-injection", "cves": ["CVE-2024-4577"], "severity": "critical", "products": "PHP-CGI on Windows",
+      "title": { "en": "PHP-CGI argument injection", "ko": "PHP-CGI 인자 주입" },
+      "description": { "en": "Blocks soft-hyphen (%AD) argument injection and php.ini overrides in the query string.", "ko": "쿼리의 소프트 하이픈(%AD) 인자 주입과 php.ini 설정 덮어쓰기를 차단합니다." },
+      "false_positives": { "en": "Very low (Korean %AD bytes are not matched).", "ko": "매우 낮음 (한글의 %AD 바이트는 걸리지 않습니다)." },
+      "groups": [
+        [ { "field": "http.query", "operator": "matches", "value": ["(?i)(?:^|[&+])%ad[a-z]"] } ],
+        [ { "field": "http.query", "operator": "matches", "value": ["(?i)(?:allow_url_include|auto_prepend_file|auto_append_file)(?:=|%3d)"] } ]
+      ]
+    },
+    {
+      "id": "phpunit-eval-stdin", "cves": ["CVE-2017-9841"], "severity": "high", "products": "PHPUnit (exposed vendor directory)",
+      "title": { "en": "PHPUnit eval-stdin.php", "ko": "PHPUnit eval-stdin.php" },
+      "description": { "en": "Blocks any request into an exposed vendor/phpunit directory (still scanned constantly).", "ko": "노출된 vendor/phpunit 디렉터리로의 요청을 차단합니다(지금도 상시 스캔 대상)." },
+      "false_positives": { "en": "None expected.", "ko": "거의 없음." },
+      "groups": [[ { "field": "http.path", "operator": "contains", "value": ["/vendor/phpunit/"], "ci": true } ]]
+    }
+  ]
+}

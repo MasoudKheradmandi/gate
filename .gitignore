@@ -1,0 +1,35 @@
+# Secrets & local environment (repo may become public — never commit these)
+.env
+*.env
+!.env.example
+*.pem
+*.key
+*.crt
+secrets/
+
+# Build output
+/bin/
+/dist/
+*.exe
+node_modules/
+web/dist/
+
+# Load-test results / runtime data
+/results/
+*.log
+
+# Tooling state
+.bkit/
+docs/.pdca-status.json
+docs/.bkit-memory.json
+docs/.pdca-snapshots/
+.idea/
+.vscode/
+
+# Built admin UI (embedded into corvus-control at build time)
+control/internal/webui/dist/*
+!control/internal/webui/dist/.gitkeep
+
+# Internal design notes, decision log and reviews stay local; only translated READMEs are published
+/docs/*
+!/docs/readme/

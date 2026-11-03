@@ -1,0 +1,149 @@
+# Release: on a v* tag, build the image natively for amd64 and arm64, smoke-test each
+# architecture, publish one multi-arch tag to GHCR, sign it (keyless cosign) and attach
+# build provenance. Run manually (workflow_dispatch) to build and smoke-test without
+# publishing.
+name: release
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/gateway
+  PUBLISH: ${{ startsWith(github.ref, 'refs/tags/v') }}
+
+jobs:
+  build:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { platform: linux/amd64, runner: ubuntu-24.04, arch: amd64 }
+          - { platform: linux/arm64, runner: ubuntu-24.04-arm, arch: arm64 }
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - id: ver
+        run: |
+          if [ "$PUBLISH" = "true" ]; then v="${GITHUB_REF_NAME#v}"; else v="0.0.0-ci.${GITHUB_SHA::7}"; fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build (local, for the smoke test)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: deploy/Dockerfile
+          platforms: ${{ matrix.platform }}
+          build-args: VERSION=${{ steps.ver.outputs.version }}
+          load: true
+          tags: corvus:smoke
+          cache-from: type=gha,scope=release-${{ matrix.arch }}
+          cache-to: type=gha,scope=release-${{ matrix.arch }},mode=max
+      - name: Smoke test (gateway, admin console, embedded store)
+        run: |
+          mkdir -p data
+          docker run -d --name smoke -p 18080:80 -p 19443:9443 -v "$PWD/data:/data" corvus:smoke
+          for i in $(seq 1 60); do
+            s=$(docker inspect -f '{{.State.Health.Status}}' smoke 2>/dev/null || true)
+            [ "$s" = "healthy" ] && break
+            sleep 2
+          done
+          docker logs smoke 2>&1 | grep -v setup_token | tail -20
+          test "$(docker inspect -f '{{.State.Health.Status}}' smoke)" = "healthy"
+          test "$(curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1:19443/)" = "200"
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/)" = "404"
+          docker logs smoke 2>&1 | grep -q "embedded redis started"
+          docker logs smoke 2>&1 | grep -q "setup_token"
+          docker exec smoke sh -c 'ps -o user,args | grep -v "ps -o"'
+          test -z "$(docker exec smoke ps -o user= | grep -v -x corvus)"
+          docker rm -f smoke
+      - name: Log in to GHCR
+        if: env.PUBLISH == 'true'
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push by digest
+        id: push
+        if: env.PUBLISH == 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: deploy/Dockerfile
+          platforms: ${{ matrix.platform }}
+          build-args: VERSION=${{ steps.ver.outputs.version }}
+          cache-from: type=gha,scope=release-${{ matrix.arch }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          sbom: true
+          provenance: mode=max
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.title=Corvus AWPG
+            org.opencontainers.image.description=Active Web Protection Gateway
+            org.opencontainers.image.licenses=Apache-2.0
+            org.opencontainers.image.version=${{ steps.ver.outputs.version }}
+      - name: Record digest
+        if: env.PUBLISH == 'true'
+        run: |
+          mkdir -p digests
+          echo "${{ steps.push.outputs.digest }}" > "digests/${{ matrix.arch }}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: env.PUBLISH == 'true'
+        with:
+          name: digest-${{ matrix.arch }}
+          path: digests/${{ matrix.arch }}
+          retention-days: 1
+
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      id-token: write        # keyless signing (Sigstore) and attestations
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          pattern: digest-*
+          path: digests
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create the multi-arch tags
+        id: manifest
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          tags="-t ${IMAGE}:${v} -t ${IMAGE}:latest"
+          case "$v" in *-*) tags="-t ${IMAGE}:${v}" ;; esac       # pre-releases do not move :latest
+          major="${v%%.*}"; minor="${v#*.}"; minor="${major}.${minor%%.*}"
+          case "$v" in *-*) ;; *) tags="$tags -t ${IMAGE}:${minor} -t ${IMAGE}:${major}" ;; esac
+          docker buildx imagetools create $tags $(for f in digests/*; do echo "${IMAGE}@$(cat "$f")"; done)
+          digest=$(docker buildx imagetools inspect "${IMAGE}:${v}" --format '{{json .Manifest}}' | jq -r .digest)
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          docker buildx imagetools inspect "${IMAGE}:${v}"
+      # Keyless signing writes the repository identity to the public Sigstore log, and
+      # artifact attestations need a public repository (or Enterprise).
+      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
+        if: ${{ !github.event.repository.private }}
+      - name: Sign image (keyless)
+        if: ${{ !github.event.repository.private }}
+        run: cosign sign --yes "${IMAGE}@${{ steps.manifest.outputs.digest }}"
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        if: ${{ !github.event.repository.private }}
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.manifest.outputs.digest }}
+          push-to-registry: true

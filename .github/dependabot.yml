@@ -1,0 +1,26 @@
+# Keep dependencies and base images patched (weekly PRs).
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule: { interval: weekly }
+  - package-ecosystem: npm
+    directory: /web
+    schedule: { interval: weekly }
+    groups:
+      web:
+        patterns: ["*"]
+        update-types: [minor, patch]
+    # Major versions (React, Tailwind, Vite, TypeScript …) are migrated deliberately.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+  - package-ecosystem: docker
+    directory: /deploy
+    schedule: { interval: weekly }
+  - package-ecosystem: docker-compose
+    directory: /deploy
+    schedule: { interval: weekly }
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }

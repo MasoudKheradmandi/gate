@@ -1,0 +1,39 @@
+# Corvus AWPG — hardened install
+#   docker compose -f docker-compose.hardened.yml up -d
+#   docker compose -f docker-compose.hardened.yml logs corvus | grep setup_token
+#
+# Upgrade:
+#   docker compose -f docker-compose.hardened.yml pull
+#   docker compose -f docker-compose.hardened.yml up -d
+#
+# Runs as uid 10001 with a read-only root filesystem, no Linux capabilities and no
+# privilege escalation. A ./data bind mount must be owned by 10001 first:
+#   mkdir -p data && sudo chown 10001:10001 data
+services:
+  corvus:
+    image: ghcr.io/corvus-gateway/gateway:latest
+    restart: unless-stopped
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    ports:
+      - "80:80"
+      - "443:443"
+      - "9443:9443"   # admin console — allow only trusted networks
+    tmpfs:
+      - /tmp:size=256m,mode=1777,noexec,nosuid,nodev   # request-body / proxy buffers
+    environment:
+      # Extra names/IPs for the self-signed admin certificate, e.g. "corvus.example.com,203.0.113.10"
+      CORVUS_ADMIN_HOSTS: ${CORVUS_ADMIN_HOSTS:-}
+      # Optional: PostgreSQL instead of the built-in SQLite database
+      # CORVUS_DB_URL: postgres://corvus:change-me@postgres:5432/corvus?sslmode=disable
+      # Optional: external Redis/Valkey instead of the embedded one (several gateways)
+      # CORVUS_REDIS_HOST: redis
+      # CORVUS_REDIS_PASSWORD: change-me
+      # Optional: read-only NPM volumes for "Import from NPM" (mount below)
+      CORVUS_IMPORT_DIR: /import
+    volumes:
+      - ./data:/data
+      # - /path/to/npm/data:/import/npm/data:ro
+      # - /path/to/npm/letsencrypt:/import/npm/letsencrypt:ro

@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<meta name="color-scheme" content="light dark">
+<title>You are in the queue</title>
+<style>
+  /* Modern but calm: soft neutral surface, rounded card, one accent colour. */
+  :root {
+    --bg: #f5f6f8; --dot: rgba(15,23,42,.07); --card: #ffffff; --fg: #0f172a; --muted: #5b6474; --subtle: #8a93a3;
+    --line: #e7e9ee; --tile: #f6f7f9; --accent: #2563eb; --accent-soft: rgba(37,99,235,.10); --track: #eceef2;
+    --ok: #16a34a; --ok-soft: rgba(22,163,74,.12); --warn: #b45309; --warn-soft: #fef6e7;
+    --shadow: 0 1px 2px rgba(15,23,42,.04), 0 12px 32px -12px rgba(15,23,42,.16);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0b0d12; --dot: rgba(255,255,255,.05); --card: #14171d; --fg: #eef1f6; --muted: #a3abba; --subtle: #6f7787;
+      --line: #232832; --tile: #1a1e26; --accent: #4f8cff; --accent-soft: rgba(79,140,255,.14); --track: #252a34;
+      --ok: #34c06a; --ok-soft: rgba(52,192,106,.14); --warn: #f2b84b; --warn-soft: #251f12;
+      --shadow: 0 0 0 1px rgba(255,255,255,.03), 0 18px 40px -18px rgba(0,0,0,.7); }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; color: var(--fg); overflow-wrap: anywhere; -webkit-font-smoothing: antialiased;
+    font: 15px/1.55 "Pretendard Variable", Pretendard, system-ui, -apple-system, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic",
+      "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Hiragino Sans", "Yu Gothic UI", "Meiryo", sans-serif;
+    background: var(--bg); background-image: radial-gradient(var(--dot) 1px, transparent 1px); background-size: 22px 22px; }
+  html:lang(ko) body { word-break: keep-all; }
+  html:lang(zh) body, html:lang(ja) body { overflow-wrap: break-word; line-break: strict; }
+  html:lang(zh) body { font-family: -apple-system, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans CJK SC", "Noto Sans SC", system-ui, sans-serif; }
+  html:lang(ja) body { font-family: -apple-system, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Meiryo UI", "Meiryo", "Noto Sans CJK JP", "Noto Sans JP", system-ui, sans-serif; }
+  .page { min-height: 100%; display: flex; flex-direction: column; }
+  header { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 18px clamp(16px, 4vw, 36px); }
+  /* Language picker: native <select> (keyboard/screen-reader/mobile sheet for free) dressed as the pill. */
+  .lang { position: relative; display: inline-flex; align-items: center; max-width: 100%; color: var(--subtle);
+    border-radius: 10px; background: var(--card); border: 1px solid var(--line); transition: border-color .15s; }
+  .lang:hover { border-color: var(--subtle); }
+  .lang:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .lang svg { position: absolute; top: 50%; transform: translateY(-50%); pointer-events: none; }
+  .lang .globe { left: 9px; }
+  .lang .chev { right: 8px; }
+  .lang select { -webkit-appearance: none; -moz-appearance: none; appearance: none; margin: 0; border: 0; border-radius: 9px; outline: none; cursor: pointer;
+    min-width: 0; max-width: 100%; padding: 6px 26px 6px 29px; font-family: inherit; font-size: 12.5px; font-weight: 600; line-height: 1.4;
+    color: var(--fg); background: var(--card); }
+  .lang option { color: var(--fg); background: var(--card); }
+
+  main { flex: 1; display: flex; justify-content: center; align-items: flex-start; padding: clamp(12px, 7vh, 72px) 16px 24px; }
+  .wrap { width: 100%; max-width: 27.5rem; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 20px; box-shadow: var(--shadow); overflow: hidden;
+    animation: in .45s cubic-bezier(.2,.7,.2,1) both; }
+  @keyframes in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  .body { padding: 30px 30px 24px; }
+  .status { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 600; color: var(--accent);
+    background: var(--accent-soft); padding: 5px 10px; border-radius: 999px; margin-bottom: 16px; }
+  .status i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; animation: blink 1.6s ease-in-out infinite; }
+  @keyframes blink { 50% { opacity: .35; } }
+  .entering .status { color: var(--ok); background: var(--ok-soft); }
+  h1 { font-size: 22px; font-weight: 700; letter-spacing: -.02em; line-height: 1.35; margin: 0 0 6px; }
+  .lead { margin: 0 0 26px; color: var(--muted); font-size: 14.5px; }
+
+  .pos { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+  .pos .k { font-size: 13px; font-weight: 600; color: var(--muted); padding-bottom: 6px; }
+  .pos .v { font-size: 52px; font-weight: 750; line-height: 1; letter-spacing: -.035em; font-variant-numeric: tabular-nums; }
+  .pos .v small { font-size: 17px; font-weight: 600; letter-spacing: 0; color: var(--muted); margin-left: 4px; }
+  .bar { position: relative; height: 8px; border-radius: 999px; background: var(--track); overflow: hidden; margin-bottom: 22px; }
+  .bar > i { position: absolute; inset: 0 auto 0 0; width: 3%; border-radius: inherit; background: var(--accent); transition: width .9s cubic-bezier(.2,.7,.2,1); overflow: hidden; }
+  .bar > i::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,.45), transparent); transform: translateX(-100%); animation: sweep 2.2s ease-in-out infinite; }
+  @keyframes sweep { to { transform: translateX(100%); } }
+  .entering .bar > i { background: var(--ok); }
+
+  dl { margin: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  dl > div { background: var(--tile); border-radius: 12px; padding: 11px 12px; min-width: 0; }
+  dt { font-size: 12px; color: var(--subtle); font-weight: 600; margin-bottom: 2px; }
+  dd { margin: 0; font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  dd.dim { color: var(--subtle); font-weight: 500; font-size: 14px; }
+  #eta { white-space: normal; overflow-wrap: break-word; line-height: 1.3; }
+  dt, #eta { overflow-wrap: normal; -webkit-hyphens: auto; hyphens: auto; }
+  .live { display: flex; align-items: center; gap: 6px; margin-top: 16px; font-size: 12.5px; color: var(--subtle); }
+  .live b { font-weight: 500; }
+
+  .band { display: flex; gap: 10px; align-items: flex-start; padding: 14px 30px; border-top: 1px solid var(--line); font-size: 13.5px; color: var(--muted); }
+  .band svg { flex: none; margin-top: 2px; color: var(--subtle); }
+  .band.warn { background: var(--warn-soft); color: var(--warn); }
+  .band.warn svg { color: var(--warn); }
+  .preview { margin: 0 0 12px; padding: 9px 14px; font-size: 13px; color: var(--warn); background: var(--warn-soft); border: 1px solid var(--line); border-radius: 12px; }
+  footer { display: flex; align-items: center; justify-content: center; gap: 7px; font-size: 12px; color: var(--subtle); padding: 14px 16px 22px; }
+  footer svg { height: 13px; width: auto; }
+
+  @media (max-width: 480px) {
+    .body { padding: 24px 20px 20px; } .band { padding: 12px 20px; }
+    .pos .v { font-size: 44px; } dl { gap: 6px; } dl > div { padding: 10px; } dd { font-size: 15px; }
+  }
+  @media (max-width: 360px) { dl > div { padding: 9px 8px; } dt { font-size: 11px; } dd { font-size: 14px; } }
+  @media (prefers-reduced-motion: reduce) { .card, .status i, .bar > i::after { animation: none; } .bar > i { transition: none; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <label class="lang">
+      <svg class="globe" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>
+      <select id="lang" aria-label="Language">
+        <option value="en" lang="en">English</option>
+        <option value="ko" lang="ko">한국어</option>
+        <option value="zh" lang="zh-CN">简体中文</option>
+        <option value="ja" lang="ja">日本語</option>
+        <option value="ru" lang="ru">Русский</option>
+        <option value="fr" lang="fr">Français</option>
+        <option value="de" lang="de">Deutsch</option>
+        <option value="es" lang="es">Español</option>
+      </select>
+      <svg class="chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+    </label>
+  </header>
+
+  <main>
+    <div class="wrap">
+      <div class="preview" id="preview" hidden></div>
+      <section class="card" id="card" aria-live="polite">
+        <div class="body">
+          <div class="status"><i aria-hidden="true"></i><span id="status" data-i18n="status"></span></div>
+          <h1 id="title" data-i18n="title"></h1>
+          <p class="lead" id="lead" data-i18n="lead"></p>
+
+          <div class="pos"><span class="k" data-i18n="ahead"></span><span class="v"><span id="rank">–</span><small data-i18n="people"></small></span></div>
+          <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" id="bar"><i id="fill"></i></div>
+
+          <dl>
+            <div><dt data-i18n="eta"></dt><dd id="eta" class="dim">–</dd></div>
+            <div><dt data-i18n="ticket"></dt><dd id="ticket">–</dd></div>
+            <div><dt data-i18n="waiting"></dt><dd id="waiting">–</dd></div>
+          </dl>
+          <div class="live"><span data-i18n="updated"></span><b id="updated">–</b></div>
+        </div>
+        <div class="band" id="band">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4M12 8h.01"/></svg>
+          <span id="note" data-i18n="keep"></span>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <footer><svg viewBox="0 0 914 608" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M 446.500 9.040 C 391.945 14.550, 337.802 33.913, 297.500 62.329 C 261.885 87.439, 235.140 114.532, 179.364 182 C 155.760 210.551, 107.035 280.368, 109.201 282.534 C 109.446 282.779, 115.688 280.950, 123.073 278.470 C 139.848 272.837, 157.366 268.495, 171 266.589 C 182.942 264.920, 197.003 264.007, 196.993 264.900 C 196.989 265.230, 193.332 270, 188.865 275.500 C 164.240 305.823, 137.767 345.417, 112.977 389 C 110.943 392.575, 107.238 399.100, 104.742 403.500 C 98.706 414.141, 77.585 454.970, 60.512 489 C 52.923 504.125, 44.613 520.550, 42.043 525.500 C 33.969 541.054, 8 597.219, 8 599.127 C 8 600.120, 506.558 600.336, 514.799 599.346 C 521.305 598.565, 519.654 601.544, 535.736 561.574 C 542.612 544.484, 551.049 523.525, 554.485 515 C 560 501.316, 569.159 480.577, 588.490 438 C 600.532 411.475, 619.227 374.815, 628.520 359.500 C 641.176 338.642, 643.277 335, 642.654 335 C 639.131 335, 600.895 352.285, 584.500 361.289 C 522.694 395.234, 461.828 441.128, 411.512 491.727 L 393.838 509.500 398.501 500.106 C 414.634 467.610, 444.429 427.476, 475.453 396.455 C 549.322 322.592, 638.053 284.526, 754.174 276.882 C 785.042 274.850, 843.171 276.469, 886.706 280.574 C 896.169 281.466, 904.368 282.039, 904.926 281.848 C 907.908 280.824, 881.032 241.135, 865.333 223.379 C 822.909 175.398, 771.566 144.213, 705.886 126.534 C 700.427 125.065, 699.978 124.664, 689.539 111.955 C 641.830 53.870, 585.556 21.227, 514.500 10.420 C 502.494 8.594, 459.545 7.723, 446.500 9.040 M 486.594 126.750 C 489.356 138.771, 501.990 165.630, 510.466 177.500 C 528.042 202.116, 555.128 209.780, 581.493 197.598 C 593.159 192.208, 606.573 182.664, 621.963 168.802 C 628.548 162.871, 629.173 163.431, 610.097 158.159 C 587.880 152.018, 577.806 149.240, 562.500 145.032 C 554.800 142.915, 534.591 137.317, 517.591 132.592 C 500.590 127.866, 486.519 124, 486.322 124 C 486.124 124, 486.246 125.237, 486.594 126.750"/></svg><span>Protected by Corvus AWPG</span></footer>
+</div>
+<script>
+(function () {
+  "use strict";
+  var I18N = {
+    ko: { status: "대기 중", statusIn: "입장 중", title: "접속 대기 중입니다", lead: "접속자가 많아 순서대로 입장하고 있습니다. 차례가 되면 자동으로 이동합니다.",
+          ahead: "내 앞 대기 인원", people: "명", eta: "예상 대기", ticket: "대기번호", waiting: "전체 대기", updated: "마지막 업데이트 ·",
+          keep: "이 창을 닫지 마세요. 새로고침하거나 잠시 후 다시 접속해도 순서는 유지됩니다.",
+          calc: "계산 중", lessMin: "1분 이내", min: "분", now: "방금", ago: "초 전",
+          enterTitle: "곧 입장합니다", enterLead: "차례가 되었습니다. 잠시 후 페이지로 이동합니다.",
+          retry: "연결이 원활하지 않아 다시 시도하고 있습니다.", busy: "대기 인원이 많아 잠시 후 다시 시도합니다.",
+          preview: "미리보기 화면입니다. 숫자는 예시이며 실제 방문자에게는 실시간 순번이 표시됩니다.", language: "언어" },
+    en: { status: "Waiting", statusIn: "Entering", title: "You are in the queue", lead: "Visitors are admitted in order due to high demand. You will be redirected automatically when it is your turn.",
+          ahead: "People ahead of you", people: "", eta: "Est. wait", ticket: "Ticket", waiting: "In queue", updated: "Last updated ·",
+          keep: "Keep this page open. Your place is kept if you refresh or return shortly.",
+          calc: "Calculating", lessMin: "Under 1 min", min: " min", now: "Just now", ago: "s ago",
+          enterTitle: "Entering now", enterLead: "It is your turn. Redirecting you shortly.",
+          retry: "Connection issue. Retrying.", busy: "The queue is busy. Retrying shortly.",
+          preview: "Preview. Numbers are examples; visitors see their live position.", language: "Language" },
+    zh: { status: "排队中", statusIn: "正在进入", title: "您正在排队", lead: "当前访问人数较多，我们将按顺序安排进入。轮到您时页面会自动跳转。",
+          ahead: "您前面还有", people: "人", eta: "预计等待", ticket: "排队号", waiting: "排队总数", updated: "最近更新 ·",
+          keep: "请勿关闭此页面。刷新或稍后返回，您的位置仍会保留。",
+          calc: "计算中", lessMin: "不到 1 分钟", min: " 分钟", now: "刚刚", ago: " 秒前",
+          enterTitle: "即将进入", enterLead: "轮到您了，马上为您跳转。",
+          retry: "网络连接不稳定，正在重试。", busy: "排队人数较多，稍后将自动重试。",
+          preview: "预览页面。数字仅为示例，实际访客将看到实时排队位置。", language: "语言" },
+    ja: { status: "待機中", statusIn: "入場中", title: "ただいま順番待ちです", lead: "アクセスが集中しているため、順番にご案内しています。順番が来ると自動的に移動します。",
+          ahead: "あなたの前の人数", people: "人", eta: "待ち時間の目安", ticket: "整理番号", waiting: "待機人数", updated: "最終更新 ·",
+          keep: "このページは閉じずにお待ちください。再読み込みしても、すぐに戻っても順番は保持されます。",
+          calc: "計算中", lessMin: "1分未満", min: "分", now: "たった今", ago: "秒前",
+          enterTitle: "まもなく入場します", enterLead: "順番が来ました。まもなくページへ移動します。",
+          retry: "接続が不安定なため、再試行しています。", busy: "混み合っているため、しばらくしてから再試行します。",
+          preview: "プレビュー画面です。数値は例で、実際の訪問者にはリアルタイムの順番が表示されます。", language: "言語" },
+    ru: { status: "В очереди", statusIn: "Вход", title: "Вы в очереди", lead: "Из-за высокой нагрузки посетители проходят по очереди. Когда подойдёт ваша очередь, страница откроется автоматически.",
+          ahead: "Перед вами", people: "", eta: "Ожидание", ticket: "Номер", waiting: "В очереди", updated: "Обновлено ·",
+          keep: "Не закрывайте эту страницу. Если вы обновите её или скоро вернётесь, ваше место сохранится.",
+          calc: "Подсчёт", lessMin: "< 1 мин", min: " мин", now: "Только что", ago: " с назад",
+          enterTitle: "Вход", enterLead: "Ваша очередь подошла. Сейчас вы будете перенаправлены.",
+          retry: "Проблема с подключением. Повторяем попытку.", busy: "Очередь перегружена. Скоро попробуем снова.",
+          preview: "Предпросмотр. Числа приведены для примера; посетители видят своё место в реальном времени.", language: "Язык" },
+    fr: { status: "En attente", statusIn: "Entrée", title: "Vous êtes dans la file d’attente", lead: "En raison d’une forte affluence, les visiteurs sont admis dans l’ordre. Vous serez redirigé automatiquement quand ce sera votre tour.",
+          ahead: "Personnes devant vous", people: "", eta: "Attente estimée", ticket: "Ticket", waiting: "En file", updated: "Mis à jour ·",
+          keep: "Gardez cette page ouverte. Votre place est conservée si vous actualisez ou revenez rapidement.",
+          calc: "Calcul…", lessMin: "< 1 min", min: " min", now: "À l’instant", ago: " s",
+          enterTitle: "Entrée en cours", enterLead: "C’est votre tour. Redirection imminente.",
+          retry: "Problème de connexion. Nouvelle tentative…", busy: "La file est saturée. Nouvelle tentative sous peu.",
+          preview: "Aperçu. Les chiffres sont des exemples ; les visiteurs voient leur position en temps réel.", language: "Langue" },
+    de: { status: "Bitte warten", statusIn: "Einlass", title: "Sie sind in der Warteschlange", lead: "Wegen hoher Nachfrage werden Besucher der Reihe nach eingelassen. Sie werden automatisch weitergeleitet, sobald Sie an der Reihe sind.",
+          ahead: "Personen vor Ihnen", people: "", eta: "Wartezeit ca.", ticket: "Nummer", waiting: "Wartend", updated: "Aktualisiert ·",
+          keep: "Lassen Sie diese Seite geöffnet. Ihr Platz bleibt erhalten, wenn Sie neu laden oder bald zurückkehren.",
+          calc: "Berechnung…", lessMin: "< 1 Min.", min: " Min.", now: "Gerade eben", ago: " s",
+          enterTitle: "Gleich geht’s los", enterLead: "Sie sind an der Reihe. Sie werden gleich weitergeleitet.",
+          retry: "Verbindungsproblem. Neuer Versuch läuft.", busy: "Die Warteschlange ist ausgelastet. Neuer Versuch in Kürze.",
+          preview: "Vorschau. Die Zahlen sind Beispiele; Besucher sehen ihre aktuelle Position.", language: "Sprache" },
+    es: { status: "En espera", statusIn: "Entrando", title: "Estás en la cola", lead: "Debido a la alta demanda, los visitantes entran por orden. Te redirigiremos automáticamente cuando sea tu turno.",
+          ahead: "Personas delante de ti", people: "", eta: "Espera estimada", ticket: "Número", waiting: "En la cola", updated: "Actualizado ·",
+          keep: "No cierres esta página. Conservarás tu lugar si la actualizas o vuelves pronto.",
+          calc: "Calculando", lessMin: "< 1 min", min: " min", now: "Ahora mismo", ago: " s",
+          enterTitle: "Ya es tu turno", enterLead: "Te estamos redirigiendo.",
+          retry: "Problema de conexión. Reintentando.", busy: "La cola está muy llena. Lo intentaremos de nuevo en breve.",
+          preview: "Vista previa. Los números son de ejemplo; los visitantes ven su posición en tiempo real.", language: "Idioma" }
+  };
+  var LOCALE = { zh: "zh-CN" };            // BCP 47 tag for <html lang> and Intl
+  var KEY = "corvus.wr.lang";              // manual choice, remembered per browser
+  var params = new URLSearchParams(location.search);
+  var preview = params.get("preview") === "1";
+
+  // Language: ?lang= > saved manual choice > browser languages (primary subtag; zh → Simplified) > English.
+  function pick(c) { c = String(c || "").toLowerCase().split(/[-_]/)[0]; return I18N.hasOwnProperty(c) ? c : null; }
+  function stored() { try { return localStorage.getItem(KEY); } catch (e) { return null; } }
+  function browser() {
+    var l = navigator.languages && navigator.languages.length ? navigator.languages : [navigator.language];
+    for (var i = 0; i < l.length; i++) { var c = pick(l[i]); if (c) return c; }
+    return null;
+  }
+  var lang = pick(params.get("lang")) || pick(stored()) || browser() || "en";
+  function t(k) { var v = I18N[lang][k]; return v === undefined ? I18N.en[k] : v; }
+  function $(id) { return document.getElementById(id); }
+  function loc() { return LOCALE[lang] || lang; }
+  var fmt, fmtMin, fmtRel;
+  function formatters() {
+    var l = loc();
+    try { fmt = new Intl.NumberFormat(l); } catch (e) { fmt = { format: String }; }
+    try { fmtMin = new Intl.NumberFormat(l, { style: "unit", unit: "minute", unitDisplay: "short" }); } catch (e) { fmtMin = null; }
+    try { fmtRel = new Intl.RelativeTimeFormat(l, { numeric: "auto", style: "short" }); } catch (e) { fmtRel = null; }
+  }
+  function minutes(m) { return fmtMin ? fmtMin.format(m) : fmt.format(m) + t("min"); }
+  function etaText(m) { return m === null || m === undefined ? null : (m < 1 ? t("lessMin") : minutes(Math.ceil(m))); }
+  var st = { entering: false, last: null, first: null, updated: 0, samples: [] };
+
+  var picker = $("lang");
+  function render() {
+    formatters();
+    document.documentElement.lang = loc();
+    Array.prototype.forEach.call(document.querySelectorAll("[data-i18n]"), function (el) { el.textContent = t(el.getAttribute("data-i18n")); });
+    picker.value = lang; picker.setAttribute("aria-label", t("language") + (lang === "en" ? "" : " (Language)"));
+    if (st.entering) { $("status").textContent = t("statusIn"); $("title").textContent = t("enterTitle"); $("lead").textContent = t("enterLead"); }
+    document.title = st.entering ? t("enterTitle") : t("title");
+    if (preview) { $("preview").hidden = false; $("preview").textContent = t("preview"); }
+    if (st.last) show(st.last);
+    tick();
+  }
+  picker.addEventListener("change", function () {
+    var c = pick(picker.value); if (!c) return;
+    lang = c; try { localStorage.setItem(KEY, c); } catch (e) {}
+    render();
+  });
+
+  // Same-origin return path only (resolved exactly as the browser would follow it).
+  var ret = "/";
+  try { var u = new URL(params.get("r") || "/", location.origin); if (u.origin === location.origin) ret = u.pathname + u.search + u.hash; } catch (e) { ret = "/"; }
+  var room = location.pathname.split("/").pop();
+
+  // ETA only with evidence: at least 3 samples over 20 s with the line moving.
+  function eta(rank) {
+    var now = Date.now(), s = st.samples;
+    s.push([now, rank]); while (s.length > 40) s.shift();
+    var a = s[0];
+    if (s.length < 3 || now - a[0] < 20000 || a[1] <= rank) return null;
+    var perSec = (a[1] - rank) / ((now - a[0]) / 1000);
+    if (perSec <= 0) return null;
+    return rank / perSec / 60;   // minutes; formatted in show() so a language switch re-renders it
+  }
+
+  function show(s) {
+    st.last = s;
+    if (st.first === null || s.rank > st.first) st.first = s.rank;
+    $("rank").textContent = fmt.format(Math.max(0, s.rank));
+    $("ticket").textContent = s.ticket ? "#" + fmt.format(s.ticket) : "–";
+    $("waiting").textContent = fmt.format(s.waiting || 0) + t("people");
+    var e = etaText(s.etaMin);
+    $("eta").textContent = e || t("calc");
+    $("eta").className = e ? "" : "dim";
+    var pct = st.entering ? 100 : (st.first > 0 ? Math.max(3, Math.min(100, (1 - (s.rank - 1) / st.first) * 100)) : 3);
+    $("fill").style.width = pct + "%";
+    $("bar").setAttribute("aria-valuenow", String(Math.round(pct)));
+  }
+
+  function tick() {
+    if (!st.updated) return;
+    var s = Math.round((Date.now() - st.updated) / 1000);
+    $("updated").textContent = s < 3 ? t("now") : (fmtRel ? fmtRel.format(-s, "second") : fmt.format(s) + t("ago"));
+  }
+  setInterval(tick, 1000);
+
+  function note(text, warn) { $("note").textContent = text; $("band").className = warn ? "band warn" : "band"; }
+
+  function entering() {
+    st.entering = true;
+    $("card").classList.add("entering");
+    render();
+  }
+
+  render();
+  function schedule(fn, sec) { setTimeout(fn, Math.max(1, sec) * 1000 * (0.8 + Math.random() * 0.4)); }
+
+  if (preview) {
+    var demo = { rank: 128, ticket: 1342, waiting: 692 };
+    var step = function () {
+      demo.rank = Math.max(0, demo.rank - (2 + Math.floor(Math.random() * 5)));
+      demo.waiting = Math.max(demo.rank, demo.waiting - 3);
+      demo.etaMin = demo.rank > 0 ? demo.rank / 4 / 60 : null;
+      st.updated = Date.now();
+      show(demo);
+      if (demo.rank === 0) {
+        entering();
+        setTimeout(function () {
+          st.entering = false; st.first = null; $("card").classList.remove("entering");
+          demo = { rank: 128, ticket: 1342, waiting: 692 }; render(); setTimeout(step, 2000);
+        }, 4000);
+        return;
+      }
+      setTimeout(step, 2000);
+    };
+    st.updated = Date.now(); show(demo); setTimeout(step, 2000);
+    return;
+  }
+
+  var backoff = 0;
+  function poll() {
+    fetch("/__corvus/wr/" + encodeURIComponent(room) + "/status", { credentials: "same-origin", cache: "no-store" })
+      .then(function (r) {
+        if (r.status === 429) { var e = new Error("busy"); e.busy = true; throw e; }
+        if (!r.ok && r.status !== 503) throw new Error(String(r.status));
+        return r.json();
+      })
+      .then(function (s) {
+        backoff = 0; st.updated = Date.now(); note(t("keep"), false);
+        if (s.status === "active") {
+          show({ rank: 0, ticket: st.last ? st.last.ticket : 0, waiting: s.waiting || 0 }); entering();
+          setTimeout(function () { location.replace(ret); }, 800); return;
+        }
+        if (s.status === "waiting") { if (!s.pending) { s.etaMin = eta(s.rank); show(s); } schedule(poll, s.poll || 5); return; }
+        if (s.status === "full") note(t("busy"), true);
+        schedule(poll, s.retry_after || 10);
+      })
+      .catch(function (e) {
+        backoff = Math.min(60, backoff ? backoff * 2 : (e && e.busy ? 3 : 5));
+        note(e && e.busy ? t("busy") : t("retry"), true);
+        schedule(poll, backoff);
+      });
+  }
+  poll();
+})();
+</script>
+</body>
+</html>
