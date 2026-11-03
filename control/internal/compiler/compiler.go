@@ -151,7 +151,7 @@ func (c *Compiler) Render(ctx context.Context, s *store.Store, dir string) error
 			return fmt.Errorf("access list %d: %w", acls[i].ID, err)
 		}
 		for _, u := range acls[i].Users {
-			if strings.ContainsAny(u.PasswordHash, ":\n\r") || !strings.HasPrefix(u.PasswordHash, "$apr1$") {
+			if strings.ContainsAny(u.PasswordHash, ":\n\r") || !htpasswdHash(u.PasswordHash) {
 				return fmt.Errorf("access list %d: invalid password hash", acls[i].ID)
 			}
 		}
@@ -257,7 +257,18 @@ func writeTemplate(path, name string, data any) error {
 	return f.Close()
 }
 
-// writeHtpasswd writes an nginx auth_basic user file (hashes are $apr1$).
+// htpasswdHash reports whether h is a hash format the gateway accepts: bcrypt (current)
+// or apr1 (created by earlier versions). Plain text and other crypt formats are refused.
+func htpasswdHash(h string) bool {
+	for _, p := range []string{"$2a$", "$2b$", "$2y$", "$apr1$"} {
+		if strings.HasPrefix(h, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// writeHtpasswd writes an nginx auth_basic user file (bcrypt or apr1 hashes).
 func writeHtpasswd(path string, users []store.AccessListUser) error {
 	if _, err := os.Stat(path); err == nil {
 		return nil // shared by several hosts

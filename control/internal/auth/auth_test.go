@@ -1,14 +1,20 @@
 package auth
 
 import (
+	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
-func TestAPR1KnownVector(t *testing.T) {
-	// Vector produced by `openssl passwd -apr1 -salt xxxxxxxx password`.
-	if got := apr1("password", "xxxxxxxx"); got != "$apr1$xxxxxxxx$dxHfLAsjHkDRmG83UXe8K0" {
-		t.Fatalf("apr1 = %s", got)
+func TestHtpasswdHashIsBcrypt(t *testing.T) {
+	h, err := HtpasswdHash("password")
+	if err != nil || !strings.HasPrefix(h, "$2a$06$") {
+		t.Fatalf("hash = %q, %v", h, err)
+	}
+	if bcrypt.CompareHashAndPassword([]byte(h), []byte("password")) != nil {
+		t.Fatal("hash does not verify")
 	}
 }
 

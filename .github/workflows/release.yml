@@ -61,7 +61,7 @@ jobs:
           docker logs smoke 2>&1 | grep -q "embedded redis started"
           docker logs smoke 2>&1 | grep -q "setup_token"
           docker exec smoke sh -c 'ps -o user,args | grep -v "ps -o"'
-          test -z "$(docker exec smoke ps -o user= | grep -v -x corvus)"
+          test -z "$(docker exec smoke ps -o user | tail -n +2 | grep -v -x corvus)"   # every process runs as corvus
           docker rm -f smoke
       - name: Log in to GHCR
         if: env.PUBLISH == 'true'

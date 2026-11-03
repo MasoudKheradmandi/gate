@@ -65,7 +65,14 @@ func applyBasicAuth(ctx context.Context, tx *store.Store, h *store.ProxyHost, be
 			if len(u.Password) < 8 {
 				return validate.Errors{{Field: "basic_auth", Code: "weak", Message: "passwords must be at least 8 characters"}}
 			}
-			hash = auth.APR1(u.Password)
+			if len(u.Password) > 72 {
+				return validate.Errors{{Field: "basic_auth", Code: "too_long", Message: "passwords must be at most 72 bytes"}}
+			}
+			h, err := auth.HtpasswdHash(u.Password)
+			if err != nil {
+				return err
+			}
+			hash = h
 		}
 		if hash == "" {
 			return validate.Errors{{Field: "basic_auth", Code: "password_required", Message: fmt.Sprintf("a password is required for new user %q", name)}}

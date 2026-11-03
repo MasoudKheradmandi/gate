@@ -224,7 +224,11 @@ func (s *Server) npmApply(w http.ResponseWriter, r *http.Request) {
 				xa.Deny = append(xa.Deny, "all") // NPM appends "deny all" after client rules
 			}
 			for _, u := range a.Users {
-				xa.Users = append(xa.Users, store.AccessListUser{Username: u.Username, PasswordHash: auth.APR1(u.Password)})
+				h, err := auth.HtpasswdHash(u.Password)
+				if err != nil {
+					return err
+				}
+				xa.Users = append(xa.Users, store.AccessListUser{Username: u.Username, PasswordHash: h})
 			}
 			ipRules[a.NPMID] = &ipRule{name: xa.Name, satisfy: xa.Satisfy, allow: xa.Allow, deny: xa.Deny, users: len(xa.Users) > 0}
 			if len(xa.Users) == 0 {
