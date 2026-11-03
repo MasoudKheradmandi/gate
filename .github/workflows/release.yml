@@ -60,8 +60,10 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/)" = "404"
           docker logs smoke 2>&1 | grep -q "embedded redis started"
           docker logs smoke 2>&1 | grep -q "setup_token"
-          docker exec smoke sh -c 'ps -o user,args | grep -v "ps -o"'
-          test -z "$(docker exec smoke ps -o user | tail -n +2 | grep -v -x corvus)"   # every process runs as corvus
+          # every service process runs as corvus (the inspecting `ps` itself is excluded)
+          procs=$(docker exec smoke ps -o user,args | tail -n +2 | grep -v " ps -o ")
+          echo "$procs"
+          test -z "$(echo "$procs" | awk '{print $1}' | grep -v -x corvus)"
           docker rm -f smoke
       - name: Log in to GHCR
         if: env.PUBLISH == 'true'
