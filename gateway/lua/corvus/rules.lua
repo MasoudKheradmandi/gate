@@ -21,6 +21,7 @@ local body = require "corvus.body"
 local ualist = require "corvus.ualist"
 local challenge = require "corvus.challenge"
 local underattack = require "corvus.underattack"
+local accesslog = require "corvus.accesslog"
 local ffi = require "ffi"
 local bit = require "bit"
 
@@ -70,20 +71,33 @@ local function mask(bin, p)
   return s
 end
 
+-- IPv4 networks are kept as masked 32-bit numbers (no string building per lookup).
+local band, bor, lshift = bit.band, bit.bor, bit.lshift
+local function v4mask(p) return p == 0 and 0 or lshift(-1, 32 - p) end
+local function v4num(bin)
+  local b1, b2, b3, b4 = byte(bin, 1, 4)
+  return bor(lshift(b1, 24), lshift(b2, 16), lshift(b3, 8), b4)
+end
+
 local function ip_matcher(nets)
-  local m = { [4] = { lens = {}, sets = {} }, [16] = { lens = {}, sets = {} } }
+  local m = { [4] = { lens = {}, sets = {}, masks = {} }, [16] = { lens = {}, sets = {} } }
   for _, n in ipairs(nets) do
     local hex, p = n:match("^(%x+)/(%d+)$")
     p = tonumber(p)
-    if hex and p and (#hex == 8 or #hex == 32) then
+    if hex and p and (#hex == 8 or #hex == 32) and p <= #hex * 4 then
       local fam = m[#hex / 2]
       local set = fam.sets[p]
       if not set then
         set = {}
         fam.sets[p] = set
         fam.lens[#fam.lens + 1] = p
+        if fam.masks then fam.masks[p] = v4mask(p) end
       end
-      set[mask(unhex(hex), p)] = true
+      if #hex == 8 then
+        set[band(v4num(unhex(hex)), fam.masks[p])] = true
+      else
+        set[mask(unhex(hex), p)] = true
+      end
     end
   end
   for _, fam in pairs(m) do table.sort(fam.lens, function(a, b) return a > b end) end
@@ -93,8 +107,18 @@ end
 local function ip_in(m, bin)
   local fam = m[#bin]
   if not fam then return false end
-  for _, p in ipairs(fam.lens) do
-    if fam.sets[p][mask(bin, p)] then return true end
+  local lens, sets = fam.lens, fam.sets
+  if #bin == 4 then
+    local x, masks = v4num(bin), fam.masks
+    for i = 1, #lens do
+      local p = lens[i]
+      if sets[p][band(x, masks[p])] then return true end
+    end
+    return false
+  end
+  for i = 1, #lens do
+    local p = lens[i]
+    if sets[p][mask(bin, p)] then return true end
   end
   return false
 end
@@ -206,6 +230,8 @@ function _M.init(path)
     HOSTS[tonumber(hid) or hid] = { rules = list, cf = h.cf and true or false, exploits = h.exploits and true or false,
       body = h.body or "off", body_max = tonumber(h.body_max) or 1048576,
       ua = ua, ua_rule = ua and { id = underattack.RULE, ch = ua.ch } or nil }
+    local hc = HOSTS[tonumber(hid) or hid]
+    hc.idle = #list == 0 and not hc.exploits and hc.body == "off" and not ua
   end
   GEO = load_geo(cfg.geo)
   if cfg.body_signatures then body.set_signatures(cfg.body_signatures) end
@@ -389,18 +415,27 @@ local function challenge_rule(host, rid)
   return nil
 end
 
+local function is_acme(uri)  -- byte test first: no substring for ordinary paths
+  return byte(uri, 2) == 46 and sub(uri, 1, 28) == "/.well-known/acme-challenge/"
+end
+
 function _M.rewrite(host_id)
   local host = HOSTS[host_id]
   if not host then return end
-  local uri = ngx.var.uri
-  if sub(uri, 1, 28) == "/.well-known/acme-challenge/" then return end  -- never block certificate validation
 
   -- Banned client addresses (automatic or manual bans pushed by corvus-control).
+  -- Certificate validation is never blocked.
   local bans = ngx.shared.corvus_bans
   if bans and bans:get(ngx.var.remote_addr) then
+    if is_acme(ngx.var.uri) then return end
     ngx.var.corvus_ban = "1"
     return deny(403)
   end
+  -- Nothing else configured for this host (no rules, exploit or body blocking, under
+  -- attack mode): done, without reading request fields.
+  if host.idle then return end
+  local uri = ngx.var.uri
+  if is_acme(uri) then return end
 
   local ctx = {}
   for _, rule in ipairs(host.rules) do
@@ -595,12 +630,21 @@ end
 -- with its escalation and acknowledges them with the next ban-list push.
 
 local BB_V, BB_CFG = nil, nil  -- per-worker compiled settings and their version
+local BB_AT = -1               -- when this worker last checked the version (ngx.now())
 
+-- Settings pushed by corvus-control; each worker looks for a new version at most once a
+-- second (a shared-dict read per request is measurable on the hot path).
 local function bb_config()
+  local now = ngx.now()
+  if now - BB_AT < 1 then return BB_CFG end
+  BB_AT = now
   local q = ngx.shared.corvus_bb_q
   if not q then return nil end
   local v = q:get("cfg_v")
-  if not v then return nil end
+  if not v then
+    BB_V, BB_CFG = nil, nil
+    return nil
+  end
   if v ~= BB_V then
     local c = cjson.decode(q:get("cfg") or "")
     local cfg
@@ -623,9 +667,14 @@ local function bb_config()
   return BB_CFG
 end
 
--- log_by_lua of every proxy host.
-function _M.log(host_id)
-  if ngx.ctx.corvus_wr then ngx.var.corvus_wr = ngx.ctx.corvus_wr end
+-- log_by_lua of every proxy host: access log record, then bad-behaviour counting. room: the host has an access queue (its decision is
+-- in ngx.ctx; ngx.ctx is not touched otherwise, creating it costs a table per request).
+function _M.log(host_id, room)
+  if room then
+    local wr = ngx.ctx.corvus_wr
+    if wr then ngx.var.corvus_wr = wr end
+  end
+  accesslog.record()  -- the host's access log (nginx's own access_log is off there)
   local cfg = bb_config()
   if not cfg then return end
   local status = tonumber(ngx.var.status)
