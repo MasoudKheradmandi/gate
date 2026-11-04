@@ -295,7 +295,8 @@ func (s *Server) npmApply(w http.ResponseWriter, r *http.Request) {
 			xh := &store.ProxyHost{Domains: h.Domains, ForwardScheme: h.ForwardScheme, ForwardHost: h.ForwardHost, ForwardPort: h.ForwardPort,
 				Websocket: h.Websocket, HTTP2: h.HTTP2, BlockExploits: h.BlockExploits, Enabled: h.Enabled, AdvancedConfig: h.AdvancedConfig, ClientIP: "direct",
 				SecurityHeaders: "off", // NPM has no security header presets
-				Gzip:            true}  // NPM compresses text responses (its client_max_body_size stays in the advanced configuration)
+				Gzip:            true,  // NPM compresses text responses (its client_max_body_size stays in the advanced configuration)
+				Locations:       h.CustomLocations}
 			if id, ok := certMap[h.CertificateID]; ok {
 				xh.CertificateID, xh.SSLForced = &id, h.SSLForced
 			}

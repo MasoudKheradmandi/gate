@@ -5,6 +5,7 @@ import { koTokens } from "./tokens.i18n";
 import { koRedirects } from "./redirects.i18n";
 import { koStreams } from "./streams.i18n";
 import { koHeaders } from "./headers.i18n";
+import { koLocations } from "./locations.i18n";
 import { koLimits } from "./limits.i18n";
 import { koCertReplace } from "./certreplace.i18n";
 import { koListFeeds } from "./listfeeds.i18n";
@@ -209,6 +210,7 @@ export const ko = {
   ...koRedirects,
   ...koStreams,
   ...koHeaders,
+  ...koLocations,
   ...koLimits,
   ...koCertReplace,
   ...koListFeeds,

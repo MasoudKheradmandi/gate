@@ -5,6 +5,7 @@ import { tokensStrings } from "./tokens.i18n";
 import { redirectsStrings } from "./redirects.i18n";
 import { streamsStrings } from "./streams.i18n";
 import { headersStrings } from "./headers.i18n";
+import { locationsStrings } from "./locations.i18n";
 import { limitsStrings } from "./limits.i18n";
 import { certReplaceStrings } from "./certreplace.i18n";
 import { listFeedsStrings } from "./listfeeds.i18n";
@@ -311,6 +312,7 @@ export const fr: Partial<Record<keyof typeof ko, string>> = {
   ...redirectsStrings.fr,
   ...streamsStrings.fr,
   ...headersStrings.fr,
+  ...locationsStrings.fr,
   ...limitsStrings.fr,
   ...certReplaceStrings.fr,
   ...listFeedsStrings.fr,

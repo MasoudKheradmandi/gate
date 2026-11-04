@@ -53,6 +53,7 @@ OpenResty, plan de contrôle en Go, console React) capable d'**importer une conf
 
 **Proxy et TLS**
 - Hôtes proxy avec jokers (wildcards), WebSocket, HTTP/2, HTTPS forcé et extraits Nginx personnalisés
+- Emplacements personnalisés : des chemins (ex. `/api`) vers leur propre upstream, avec les protections de l'hôte
 - Hôtes de redirection : renvoyer des domaines vers un autre domaine (301/302/303/307/308, en conservant éventuellement le chemin), avec le même TLS et la même protection
 - Certificats Let's Encrypt gratuits (HTTP-01, ou DNS-01 via Cloudflare, DigitalOcean, DuckDNS, Gandi, GoDaddy, Hetzner, Namecheap) avec renouvellement automatique, ou import des vôtres (remplaçables sur place lors du renouvellement)
 - Flux (streams) : rediriger des ports TCP/UDP (bases de données, SSH, MQTT, serveurs de jeu) vers un autre hôte, avec terminaison TLS optionnelle pour TCP
@@ -287,8 +288,8 @@ et ses ports internes) ne peuvent pas servir aux flux.
 d'une installation NPM existante. Seuls les fichiers et la base de données de NPM sont lus — NPM lui-même
 n'est pas modifié, vous pouvez donc revenir en arrière à tout moment.
 
-Non importés : les hôtes 404, les emplacements personnalisés et la configuration
-avancée qui utilise des variables propres à NPM. L'aperçu liste tout ce qui est ignoré.
+Non importés : les hôtes 404 et la configuration avancée (y compris celle
+des emplacements personnalisés) qui utilise des variables propres à NPM. L'aperçu liste tout ce qui est ignoré.
 
 **Vérifiez quelle base de données votre NPM utilise.** Ouvrez le `docker-compose.yml` de NPM :
 

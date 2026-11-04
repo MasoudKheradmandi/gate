@@ -52,6 +52,7 @@ Go control plane, React console) that can **import an existing NPM setup**.
 
 **Proxy & TLS**
 - Proxy hosts with wildcards, WebSocket, HTTP/2, forced HTTPS and custom Nginx snippets
+- Custom locations: route paths (e.g. `/api`) to their own upstream, with the host's protections
 - Redirection hosts: send domains to another domain (301/302/303/307/308, optionally keeping the path), with the same TLS and protection
 - Free Let's Encrypt certificates (HTTP-01, or DNS-01 via Cloudflare, DigitalOcean, DuckDNS, Gandi, GoDaddy, Hetzner, Namecheap) with automatic renewal, or upload your own (and replace it in place when it is renewed)
 - Streams: forward TCP/UDP ports (databases, SSH, MQTT, game servers) to another host, with optional TLS termination for TCP
@@ -284,8 +285,8 @@ Encrypt and custom, including Cloudflare DNS tokens) and **access lists** (users
 an existing NPM installation. It only reads NPM's files and database — NPM itself is not changed,
 so you can go back at any time.
 
-Not imported: 404 hosts, custom locations and advanced
-configuration that uses NPM-specific variables. The preview lists everything it skips.
+Not imported: 404 hosts and advanced configuration (also of custom
+locations) that uses NPM-specific variables. The preview lists everything it skips.
 
 **Check which database your NPM uses.** Open NPM's `docker-compose.yml`:
 
