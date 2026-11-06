@@ -186,7 +186,7 @@ func TestErrorRateFlapping(t *testing.T) {
 	feed(tc, now.Add(20*time.Minute+30*time.Second), 80, 200)
 	feed(tc, now.Add(20*time.Minute+30*time.Second), 20, 502)
 	e.Evaluate(ctx, now.Add(20*time.Minute+30*time.Second)) // back
-	for i := 1; i < h.n(); i++ { // an "ongoing" reminder after the cooldown is fine
+	for i := 1; i < h.n(); i++ {                            // an "ongoing" reminder after the cooldown is fine
 		title := h.msgs[i]["attachments"].([]any)[0].(map[string]any)["title"].(string)
 		if strings.Contains(title, "Resolved") || !strings.Contains(title, "Still firing") {
 			t.Fatalf("flapping condition sent %q", title)
