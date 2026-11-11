@@ -109,7 +109,7 @@ type proxyHostInput struct {
 	Locations *[]store.Location `json:"locations"`
 
 	MaxUploadMB      *int  `json:"max_upload_mb"`      // null = global default (100 MB), 0 = unlimited
-	UpstreamTimeoutS *int  `json:"upstream_timeout_s"` // null = default (60 s, WebSocket 1 h)
+	UpstreamTimeoutS *int  `json:"upstream_timeout_s"` // null = default (60 s); WebSocket hosts at least 1 h
 	Gzip             *bool `json:"gzip"`               // omitted = on
 
 	Notes *string `json:"notes"` // omitted = unchanged
@@ -674,6 +674,7 @@ func (s *Server) replaceCertificate(w http.ResponseWriter, r *http.Request) {
 	}
 	after := *before
 	after.Name, after.Domains, after.NotAfter, after.Status, after.LastError = name, info.Domains, info.NotAfter, "valid", ""
+	after.LastErrorHint = ""
 	s.audit(r, "certificate.replace", fmt.Sprintf("certificate:%d", id), map[string]any{
 		"name": name, "domains_before": before.Domains, "domains": info.Domains, "not_after_before": before.NotAfter, "not_after": info.NotAfter})
 	writeJSON(w, 200, map[string]any{"certificate": after, "version": v})

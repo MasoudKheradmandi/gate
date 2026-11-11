@@ -218,6 +218,9 @@ chk "$(c -o /dev/null -w '%{http_code}' -X DELETE $A/api/bans/$BID)" 200 "unban"
 sleep 2
 chk "$(code "$G/ban-check")" 200 "unbanned IP allowed again"
 chk "$(c -o /dev/null -w '%{http_code}' -X PUT $A/api/settings/autoban -d '{"enabled":true,"threshold":3,"window_s":60,"duration_s":120,"include_scans":false,"scan_threshold":200,"exempt":[]}')" 200 "auto ban: threshold 3 in 1 min"
+# Detections are counted in 10-second slots; right after the unban above only slots that
+# start after it count, so attack in the next slot.
+sleep 11
 for i in 1 2 3 4 5; do code "$G/.git/config?n=$i" >/dev/null; done
 banned=""
 for i in $(seq 1 12); do sleep 2; if [ "$(code "$G/after-attack")" = 403 ]; then banned=1; break; fi; done
@@ -480,8 +483,9 @@ CID=$(echo "$R" | js "d['certificate']['id']"); chk "$(echo "$R" | js "d['certif
 chk "$(code -H 'Host: inline1.corvus.test' "$G/")" 200 "serves HTTP while the certificate is pending"
 st=pending; for i in $(seq 1 40); do st=$(c $A/api/certificates | js "[x['status'] for x in d if x['id']==$CID][0]"); [ "$st" != pending ] && break; sleep 2; done
 chk "$st" valid "certificate issued in the background"
-sleep 2
-chk "$(code -H 'Host: inline1.corvus.test' "$G/x")" 301 "HTTPS redirect activated after issuance"
+# the redeploy follows the issuance shortly (bursts are combined into one redeploy)
+rc=0; for i in $(seq 1 20); do rc=$(code -H 'Host: inline1.corvus.test' "$G/x"); [ "$rc" = 301 ] && break; sleep 2; done
+chk "$rc" 301 "HTTPS redirect activated after issuance"
 chk "$(curl -sk -o /dev/null -w '%{http_code}' --resolve inline1.corvus.test:8443:$H https://inline1.corvus.test:8443/)" 200 "HTTPS with issued certificate"
 chk "$(c $A/api/certificates | js "[x['auto_renew'] for x in d if x['id']==$CID][0]")" True "auto renew enabled"
 CREQ=$($PY -c 'import json; print(json.dumps({"email":"ops@corvus.test","dns_challenge":True,"dns_provider":"cloudflare","dns_credentials":"# Cloudflare API token" + chr(10) + "dns_cloudflare_api_token=invalid-test-token"}))')

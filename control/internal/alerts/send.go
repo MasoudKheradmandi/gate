@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -241,13 +242,113 @@ var client = &http.Client{
 
 // Send delivers m to one channel. It returns the HTTP status (0 on transport errors).
 func Send(ctx context.Context, kind string, t Target, m Message) (int, error) {
+	a := send(ctx, kind, t, m)
+	return a.code, a.err
+}
+
+// attempt is the outcome of one delivery attempt.
+type attempt struct {
+	code       int
+	err        error
+	retry      bool          // worth retrying: transport error, 408, 429 or 5xx
+	retryAfter time.Duration // from a 429 response's Retry-After header
+}
+
+// Delivery retries: a failed delivery is attempted again after each of these delays
+// (a 429's Retry-After replaces the delay, capped at maxRetryAfter). Retry-After is
+// read up to maxRetryAt: the alert's next round waits at least that long.
+var (
+	retryDelays   = []time.Duration{5 * time.Second, 30 * time.Second}
+	maxRetryAfter = 2 * time.Minute
+	maxRetryAt    = time.Hour
+)
+
+// The clock of deliveries; tests replace it to simulate time.
+var (
+	clockNow = time.Now
+	sleep    = func(ctx context.Context, d time.Duration) bool { // false: ctx ended first
+		timer := time.NewTimer(d)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return false
+		case <-timer.C:
+			return true
+		}
+	}
+)
+
+// delivery is the outcome of a delivery with retries.
+type delivery struct {
+	code       int
+	err        error
+	retryAfter time.Duration // Retry-After of the last attempt (429)
+}
+
+// sendRetry delivers m, retrying transport errors, 408, 429 and 5xx responses;
+// other 4xx answers (a wrong URL or token) are final. Each attempt has its own timeout
+// and holds a slot of sem (if any); the wait between attempts does not.
+func sendRetry(ctx context.Context, kind string, t Target, m Message, sem chan struct{}) delivery {
+	var last delivery
+	for i := 0; ; i++ {
+		if sem != nil {
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				if last.err == nil {
+					last.err = ctx.Err()
+				}
+				return last
+			}
+		}
+		actx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		a := send(actx, kind, t, m)
+		cancel()
+		if sem != nil {
+			<-sem
+		}
+		last = delivery{code: a.code, err: a.err, retryAfter: a.retryAfter}
+		if a.err == nil || !a.retry || i >= len(retryDelays) {
+			return last
+		}
+		wait := retryDelays[i]
+		if a.retryAfter > 0 {
+			wait = min(a.retryAfter, maxRetryAfter)
+		}
+		slog.Info("alert delivery failed, retrying", "kind", kind, "err", a.err, "in", wait)
+		if !sleep(ctx, wait) {
+			return last
+		}
+	}
+}
+
+// parseRetryAfter reads a Retry-After header (seconds or an HTTP date), capped at
+// maxRetryAt; 0 when absent or unreadable.
+func parseRetryAfter(v string, now time.Time) time.Duration {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0
+	}
+	if n, err := strconv.Atoi(v); err == nil {
+		if n <= 0 {
+			return 0
+		}
+		return time.Duration(min(n, int(maxRetryAt/time.Second))) * time.Second
+	}
+	if at, err := http.ParseTime(v); err == nil && at.After(now) {
+		return min(at.Sub(now), maxRetryAt)
+	}
+	return 0
+}
+
+func send(ctx context.Context, kind string, t Target, m Message) attempt {
 	dest, body, err := payload(kind, t, m)
 	if err != nil {
-		return 0, err
+		return attempt{err: err}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, dest, bytes.NewReader(body))
 	if err != nil {
-		return 0, err
+		return attempt{err: err}
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "corvus-alerts")
@@ -260,15 +361,22 @@ func Send(ctx context.Context, kind string, t Target, m Message) (int, error) {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return 0, transportError(err, req.URL, t)
+		return attempt{err: transportError(err, req.URL, t), retry: true}
 	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10)) // lets the connection be reused
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		// The response body is not reported: it may echo request details.
-		return resp.StatusCode, fmt.Errorf("HTTP %d", resp.StatusCode)
+		a := attempt{code: resp.StatusCode, err: fmt.Errorf("HTTP %d", resp.StatusCode)}
+		switch {
+		case resp.StatusCode == http.StatusTooManyRequests:
+			a.retry, a.retryAfter = true, parseRetryAfter(resp.Header.Get("Retry-After"), clockNow())
+		case resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode >= 500:
+			a.retry = true
+		}
+		return a
 	}
-	return resp.StatusCode, nil
+	return attempt{code: resp.StatusCode}
 }
 
 // transportError describes a failed request without the destination's path or

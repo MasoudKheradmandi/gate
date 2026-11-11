@@ -11,6 +11,7 @@ import (
 
 	"corvus/control/internal/feeds"
 	"corvus/control/internal/geoip"
+	"corvus/control/internal/hints"
 	"corvus/control/internal/store"
 	"corvus/control/internal/validate"
 )
@@ -228,12 +229,13 @@ func (s *Server) geoipRefresh(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "conflict", "country database is not available")
 		return
 	}
+	extendDeadlines(w, 6*time.Minute) // the download can outlast the server's write timeout
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
 	defer cancel()
 	st, err := s.GeoIP.Refresh(ctx)
 	s.audit(r, "geoip.refresh", "geoip", map[string]any{"ok": err == nil, "source": st.Source})
 	if err != nil {
-		writeJSON(w, 502, map[string]any{"error": "geoip_failed", "message": err.Error(), "status": st})
+		writeJSON(w, 502, map[string]any{"error": "geoip_failed", "message": err.Error(), "hint": hints.Net(err.Error()), "status": st})
 		return
 	}
 	writeJSON(w, 200, st)
@@ -257,6 +259,8 @@ type ipListInput struct {
 	FetchWarning string     `json:"fetch_warning"`
 	CreatedAt    *time.Time `json:"created_at"`
 	UpdatedAt    *time.Time `json:"updated_at"`
+
+	FetchErrorHint string `json:"fetch_error_hint"`
 }
 
 // ListFeeds refreshes lists that have a source URL (internal/feeds).
@@ -376,6 +380,7 @@ func (s *Server) refreshIPList(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, "unavailable", "list feeds are not available")
 		return
 	}
+	extendDeadlines(w, 3*time.Minute) // fetch plus deploy
 	l, err := s.Feeds.Refresh(r.Context(), id)
 	if l == nil {
 		// no list to show: it does not exist (any more, e.g. deleted during the fetch)

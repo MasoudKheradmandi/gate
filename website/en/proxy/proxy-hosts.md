@@ -25,8 +25,10 @@ belong to only one proxy or redirection host.
 
 ### Forward target
 
-**Scheme**, **Host / IP** and **Port** of your service. Turn on **WebSocket support** for apps that
-use WebSockets or server-sent events.
+**Scheme**, **Host / IP** and **Port** of your service. **WebSocket support** is on for new hosts:
+the upgrade is forwarded only when a client asks for a WebSocket, so other apps are unaffected. With
+it on and no upstream timeout set, the timeout is 1 hour, so idle WebSocket connections and
+server-sent events (SSE) stay open.
 
 #### Forward targets
 
@@ -89,7 +91,7 @@ Attach an [access queue](../access-queue.md) and choose the **Protected path** (
 | Option | Default | Meaning |
 |---|---|---|
 | **Max upload size** | 100 MB | Largest request body. `0` = unlimited. Larger uploads get `413` |
-| **Upstream timeout** | 60 s (1 h with WebSocket) | How long Corvus waits for your service to answer |
+| **Upstream timeout** | 60 s (1 h with WebSocket) | How long Corvus waits for your service to answer. Empty: 60 s, or 1 h for WebSocket hosts; a value you set applies as is |
 | **Gzip compression** | On | Compresses text responses (HTML, CSS, JS, JSON …). Responses that are already compressed pass unchanged |
 | **Advanced nginx config** | empty | Nginx directives inserted into the host's `server` block (administrators only) |
 

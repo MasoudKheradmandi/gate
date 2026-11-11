@@ -17,9 +17,12 @@ mkdir -p data && sudo chown 10001:10001 data
 docker compose -f docker-compose.hardened.yml up -d
 ```
 
-!!! note "Large uploads"
-    In this mode temporary files live in a 256 MB in-memory `/tmp`. If a proxy host accepts uploads
-    larger than about 200 MB, raise the `tmpfs` size in the compose file.
+!!! note "Large uploads and downloads"
+    In this mode temporary files live in a 256 MB in-memory `/tmp`. Downloads never use it, and
+    uploads stream straight to your service, except bodies that request body inspection reads: those
+    with a `Content-Length` within the inspection size limit, and bodies sent without one (chunked or
+    HTTP/2), up to the host's maximum upload size. Raise the `tmpfs` size if such uploads can be
+    larger.
 
 ## Verify the image
 

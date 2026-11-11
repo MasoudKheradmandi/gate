@@ -38,7 +38,19 @@ type Engine struct {
 	resolved    map[string]time.Time // recently resolved alerts (re-firing within the cooldown is quiet)
 	lastVersion int64
 	started     time.Time
+
+	sem chan struct{}  // bounds concurrent delivery attempts (not held while waiting to retry)
+	wg  sync.WaitGroup // deliveries in flight
 }
+
+// maxDeliveries bounds concurrent delivery attempts; failedRetry is how long an alert
+// whose notification could not be delivered anywhere waits before the next try,
+// counted from the end of the failed delivery (longer when a receiver asked for it
+// with Retry-After).
+const (
+	maxDeliveries = 8
+	failedRetry   = 2 * time.Minute
+)
 
 type active struct {
 	Rule     string    `json:"rule"`
@@ -47,9 +59,21 @@ type active struct {
 	Title    string    `json:"title"`
 	Text     string    `json:"text"`
 	Since    time.Time `json:"since"`
-	lastSent time.Time
+	lastSent time.Time // last successful notification (zero: not delivered yet)
+	retryAt  time.Time // after a failed notification, no new attempt before this
+	inflight bool      // a notification is being delivered
+	failLog  bool      // a failed notification is in the history (one per episode)
 	msg      Message
 	missed   int // evaluation rounds in a row without the condition
+}
+
+// outgoing is a notification to deliver; st is the alert whose state it updates.
+// logFail: record the delivery in the history also when it fails.
+type outgoing struct {
+	m       Message
+	st      *active
+	at      time.Time
+	logFail bool
 }
 
 // finding is one detected condition in an evaluation round.
@@ -67,6 +91,9 @@ func (e *Engine) init() {
 	}
 	if e.resolved == nil {
 		e.resolved = map[string]time.Time{}
+	}
+	if e.sem == nil {
+		e.sem = make(chan struct{}, maxDeliveries)
 	}
 }
 
@@ -114,7 +141,7 @@ func (e *Engine) Evaluate(ctx context.Context, now time.Time) {
 	e.mu.Lock()
 	e.init()
 	seen := map[string]bool{}
-	var send []Message
+	var send []outgoing
 	cooldown := time.Duration(set.CooldownS) * time.Second
 	for _, f := range found {
 		r := set.Rules[f.rule]
@@ -133,14 +160,20 @@ func (e *Engine) Evaluate(ctx context.Context, now time.Time) {
 			e.state[id] = &active{Rule: f.rule, Key: f.key, Severity: r.Severity, Title: f.title, Text: f.text, Since: now, lastSent: e.resolved[id], msg: m}
 			delete(e.resolved, id)
 		case !ok:
+			o := outgoing{m: m, at: now, logFail: true}
 			if !f.oneShot {
-				e.state[id] = &active{Rule: f.rule, Key: f.key, Severity: r.Severity, Title: f.title, Text: f.text, Since: now, lastSent: now, msg: m}
+				o.st = &active{Rule: f.rule, Key: f.key, Severity: r.Severity, Title: f.title, Text: f.text, Since: now, inflight: true, msg: m}
+				e.state[id] = o.st
 			}
-			send = append(send, m)
-		case now.Sub(a.lastSent) >= cooldown:
-			m.Title = tr["ongoing"] + " · " + m.Title
-			a.lastSent, a.msg, a.Title, a.Text = now, m, f.title, f.text
-			send = append(send, m)
+			send = append(send, o)
+		case !a.inflight && !now.Before(a.retryAt) && (a.lastSent.IsZero() || now.Sub(a.lastSent) >= cooldown):
+			// due: the cooldown since the last delivered notification has passed, or
+			// the first notification failed and is tried again
+			if !a.lastSent.IsZero() {
+				m.Title = tr["ongoing"] + " · " + m.Title
+			}
+			a.inflight, a.msg, a.Title, a.Text = true, m, f.title, f.text
+			send = append(send, outgoing{m: m, st: a, at: now, logFail: !a.failLog})
 		default:
 			a.msg, a.Title, a.Text = m, f.title, f.text
 		}
@@ -155,12 +188,13 @@ func (e *Engine) Evaluate(ctx context.Context, now time.Time) {
 		}
 		delete(e.state, id)
 		e.resolved[id] = now
-		if set.SendResolved {
+		// (not for an alert whose firing notification never got through)
+		if set.SendResolved && (!a.lastSent.IsZero() || a.inflight) {
 			m := a.msg
 			m.Status, m.Time = "resolved", now
 			m.Title = tr["resolved"] + " · " + a.Title
 			m.Text = fmt.Sprintf(tr["resolvedText"], humanDuration(now.Sub(a.Since), set.Language))
-			send = append(send, m)
+			send = append(send, outgoing{m: m, at: now, logFail: true})
 		}
 	}
 	for id, t := range e.resolved {
@@ -170,10 +204,35 @@ func (e *Engine) Evaluate(ctx context.Context, now time.Time) {
 	}
 	e.mu.Unlock()
 
-	for _, m := range send {
-		e.dispatch(ctx, m)
+	// Deliveries (with their retries) run in the background so a slow or failing
+	// receiver does not hold up the next evaluation round.
+	for _, o := range send {
+		e.wg.Add(1)
+		go func() {
+			defer e.wg.Done()
+			start := clockNow()
+			delivered, retryAfter := e.dispatch(ctx, o.m, o.logFail)
+			if o.st == nil {
+				return
+			}
+			e.mu.Lock()
+			o.st.inflight = false
+			if delivered {
+				o.st.lastSent, o.st.retryAt, o.st.failLog = o.at, time.Time{}, false
+			} else {
+				// try again soon, but not every round: counted from the end of this
+				// delivery (with its retries), at least what a receiver asked for
+				done := o.at.Add(clockNow().Sub(start))
+				o.st.retryAt = done.Add(max(failedRetry, retryAfter))
+				o.st.failLog = o.st.failLog || o.logFail
+			}
+			e.mu.Unlock()
+		}()
 	}
 }
+
+// wait blocks until the deliveries in flight are done (tests).
+func (e *Engine) wait() { e.wg.Wait() }
 
 func link(base, rule string) string {
 	if base == "" {
@@ -312,7 +371,7 @@ func (e *Engine) detect(ctx context.Context, set Settings, tr map[string]string,
 			}
 			if acmeOn && c.Kind == "acme" && c.LastError != "" && c.Status != "pending" {
 				out = append(out, finding{rule: "acme_failed", key: key, title: fmt.Sprintf(tr["acme_failed"], name),
-					text: trim(c.LastError, 400), fields: [][2]string{{tr["certificate"], name}, {tr["status"], c.Status}}})
+					text: trim(c.LastError, 400) + hintSuffix(set.Language, c.LastErrorHint), fields: [][2]string{{tr["certificate"], name}, {tr["status"], c.Status}}})
 			}
 		}
 	}
@@ -389,13 +448,18 @@ func (e *Engine) open(c store.AlertChannel) (Target, error) {
 	return t, json.Unmarshal([]byte(raw), &t)
 }
 
-func (e *Engine) dispatch(ctx context.Context, m Message) {
+// dispatch delivers m to every matching channel in parallel (with retries) and
+// records the results (a failed delivery only with logFail). It reports whether the
+// notification got through: to at least one channel, or there was no channel to
+// deliver to; and otherwise the longest Retry-After a receiver answered with.
+func (e *Engine) dispatch(ctx context.Context, m Message, logFail bool) (bool, time.Duration) {
 	chans, err := e.targets(ctx)
 	if err != nil {
 		slog.Error("alerts: list channels", "err", err)
-		return
+		return false, 0
 	}
 	rec := &store.AlertRecord{Rule: m.Rule, Severity: m.Severity, Status: m.Status, Key: m.Labels["key"], Title: m.Title, Message: m.Text}
+	var to []store.AlertChannel
 	for _, c := range chans {
 		if !c.Enabled || !atLeast(m.Severity, c.MinSeverity) && m.Status != "resolved" {
 			continue
@@ -403,18 +467,47 @@ func (e *Engine) dispatch(ctx context.Context, m Message) {
 		if len(c.Events) > 0 && !contains(c.Events, m.Rule) {
 			continue
 		}
-		rec.Results = append(rec.Results, e.deliver(ctx, c, m))
+		to = append(to, c)
 	}
-	if err := e.Store.AddAlert(ctx, rec); err != nil {
-		slog.Error("alerts: record history", "err", err)
+	delivered := len(to) == 0
+	var retryAfter time.Duration
+	if len(to) > 0 {
+		rec.Results = make([]store.DeliveryResult, len(to))
+		after := make([]time.Duration, len(to))
+		var wg sync.WaitGroup
+		for i, c := range to {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				rec.Results[i], after[i] = e.deliver(ctx, c, m, e.sem)
+			}()
+		}
+		wg.Wait()
+		for i, r := range rec.Results {
+			delivered = delivered || r.OK
+			retryAfter = max(retryAfter, after[i])
+		}
 	}
-	slog.Info("alert", "rule", m.Rule, "status", m.Status, "severity", m.Severity, "title", m.Title, "channels", len(rec.Results))
+	if delivered || logFail {
+		if err := e.Store.AddAlert(ctx, rec); err != nil {
+			slog.Error("alerts: record history", "err", err)
+		}
+	}
+	slog.Info("alert", "rule", m.Rule, "status", m.Status, "severity", m.Severity, "title", m.Title, "channels", len(rec.Results), "delivered", delivered)
+	return delivered, retryAfter
 }
 
-func (e *Engine) deliver(ctx context.Context, c store.AlertChannel, m Message) store.DeliveryResult {
+// deliver sends m to one channel. With a semaphore, failed attempts are repeated (see
+// sendRetry), each attempt holding a slot; it also returns the Retry-After of a final
+// 429 answer.
+func (e *Engine) deliver(ctx context.Context, c store.AlertChannel, m Message, sem chan struct{}) (store.DeliveryResult, time.Duration) {
 	res := store.DeliveryResult{ChannelID: c.ID, Channel: c.Name}
+	var after time.Duration
 	t, err := e.open(c)
-	if err == nil {
+	if err == nil && sem != nil {
+		d := sendRetry(ctx, c.Kind, t, m, sem)
+		err, after = d.err, d.retryAfter
+	} else if err == nil {
 		sctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		_, err = Send(sctx, c.Kind, t, m)
 		cancel()
@@ -425,7 +518,7 @@ func (e *Engine) deliver(ctx context.Context, c store.AlertChannel, m Message) s
 	} else {
 		res.OK = true
 	}
-	return res
+	return res, after
 }
 
 // Test sends a test message to one channel and records it in the history.
@@ -434,7 +527,7 @@ func (e *Engine) Test(ctx context.Context, c store.AlertChannel) store.DeliveryR
 	tr := texts[set.Language]
 	m := Message{Rule: "test", Severity: "info", Status: "test", Title: tr["test"], Text: tr["testText"], Time: time.Now(),
 		Fields: [][2]string{{tr["channel"], c.Name}, {"kind", c.Kind}}, Link: set.PublicURL}
-	res := e.deliver(ctx, c, m)
+	res, _ := e.deliver(ctx, c, m, nil) // one attempt: the console waits for the answer
 	_ = e.Store.AddAlert(ctx, &store.AlertRecord{Rule: "test", Severity: "info", Status: "test", Title: m.Title, Message: m.Text, Results: []store.DeliveryResult{res}})
 	return res
 }

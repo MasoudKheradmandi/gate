@@ -50,12 +50,12 @@
 {{- else}}
             proxy_set_header Connection "";
 {{- end}}
-{{- with .UpstreamTimeoutS}}
+{{- with .TimeoutS}}
+{{- if not $.OwnReadTimeout}}
             proxy_read_timeout {{.}}s;
+{{- end}}
+{{- if not $.OwnSendTimeout}}
             proxy_send_timeout {{.}}s;
-{{- else}}
-{{- if .Websocket}}
-            proxy_read_timeout 1h;
 {{- end}}
 {{- end}}
             proxy_pass {{.Scheme}}://{{.Name}}{{.Path}};
