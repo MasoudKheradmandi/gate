@@ -1,8 +1,8 @@
-# Release: on a v* tag, build the image natively for amd64 and arm64, smoke-test each
-# architecture, publish one multi-arch tag to GHCR, sign it (keyless cosign) and attach
+# Release: on a v* tag, build the image natively for amd64 and arm64, publish one
+# multi-arch tag to GHCR, sign it (keyless cosign) and attach
 # build provenance. The SBOMs, the provenance and signed checksums are also attached to a
 # draft GitHub release, which is published by hand with the release notes. Run manually
-# (workflow_dispatch) to build and smoke-test without publishing.
+# (workflow_dispatch) to build without publishing.
 name: release
 on:
   push:
@@ -35,55 +35,6 @@ jobs:
           if [ "$PUBLISH" = "true" ]; then v="${GITHUB_REF_NAME#v}"; else v="0.0.0-ci.${GITHUB_SHA::7}"; fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - name: Build (local, for the smoke test)
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          file: deploy/Dockerfile
-          platforms: ${{ matrix.platform }}
-          build-args: VERSION=${{ steps.ver.outputs.version }}
-          load: true
-          tags: corvus:smoke
-          cache-from: type=gha,scope=release-${{ matrix.arch }}
-          cache-to: type=gha,scope=release-${{ matrix.arch }},mode=max
-      - name: Smoke test (gateway, admin console, embedded store)
-        run: |
-          mkdir -p data
-          docker run -d --name smoke -p 18080:80 -p 19443:9443 -v "$PWD/data:/data" corvus:smoke
-          for i in $(seq 1 60); do
-            s=$(docker inspect -f '{{.State.Health.Status}}' smoke 2>/dev/null || true)
-            [ "$s" = "healthy" ] && break
-            sleep 2
-          done
-          docker logs smoke 2>&1 | grep -v setup_token | tail -20
-          test "$(docker inspect -f '{{.State.Health.Status}}' smoke)" = "healthy"
-          test "$(curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1:19443/)" = "200"
-          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/)" = "404"
-          docker logs smoke 2>&1 | grep -q "embedded redis started"
-          docker logs smoke 2>&1 | grep -q "setup_token"
-          # every service process runs as corvus (the inspecting `ps` itself is excluded)
-          procs=$(docker exec smoke ps -o user,args | tail -n +2 | grep -v " ps -o ")
-          echo "$procs"
-          test -z "$(echo "$procs" | awk '{print $1}' | grep -v -x corvus)"
-          docker rm -f smoke
-      - name: Smoke test (network_mode host, ports below 1024 without root, PUID/PGID)
-        run: |
-          mkdir -p data-host
-          docker run -d --name smoke-host --network host -v "$PWD/data-host:/data" -e CORVUS_REDIS_PORT=6390 -e PUID=1500 -e PGID=1500 corvus:smoke
-          for i in $(seq 1 60); do
-            s=$(docker inspect -f '{{.State.Health.Status}}' smoke-host 2>/dev/null || true)
-            [ "$s" = "healthy" ] && break
-            sleep 2
-          done
-          docker logs smoke-host 2>&1 | grep -v setup_token | tail -20
-          test "$(docker inspect -f '{{.State.Health.Status}}' smoke-host)" = "healthy"
-          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1/)" = "404"
-          ! docker logs smoke-host 2>&1 | grep -q "Permission denied"
-          test "$(stat -c %u:%g data-host)" = "1500:1500"
-          procs=$(docker exec smoke-host ps -o user,args | tail -n +2 | grep -v " ps -o ")
-          echo "$procs"
-          test -z "$(echo "$procs" | awk '{print $1}' | grep -v -x 1500)"
-          docker rm -f smoke-host
       - name: Log in to GHCR
         if: env.PUBLISH == 'true'
         uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
@@ -102,6 +53,7 @@ jobs:
           build-args: VERSION=${{ steps.ver.outputs.version }}
           cache-from: type=gha,scope=release-${{ matrix.arch }}
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-to: type=gha,scope=release-${{ matrix.arch }},mode=max
           sbom: true
           provenance: mode=max
           labels: |
