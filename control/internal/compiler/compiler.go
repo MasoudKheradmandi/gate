@@ -53,6 +53,67 @@ type Paths struct {
 	ResolverIPv6 bool
 	AdminPort    int // admin console/API port inside the container (9443); 0 = unknown
 	RedisPort    int // loopback port of the bundled Valkey (6379); 0 = none
+	// PPHTTPPort / PPHTTPSPort are the PROXY protocol listeners from the network
+	// settings (see WithNetwork); 0 = off. Every public server also listens on them.
+	PPHTTPPort  int
+	PPHTTPSPort int
+}
+
+// WithNetwork returns p with the PROXY protocol listeners of the network settings.
+func (p Paths) WithNetwork(n store.NetworkSettings) Paths {
+	p.PPHTTPPort, p.PPHTTPSPort = 0, 0
+	if n.ProxyProtocol.Enabled {
+		p.PPHTTPPort, p.PPHTTPSPort = n.ProxyProtocol.HTTPPort, n.ProxyProtocol.HTTPSPort
+	}
+	return p
+}
+
+// CheckProxyProtocol validates the PROXY protocol settings: two distinct valid ports
+// that neither Corvus nor a stream uses (any stream: a disabled one may be enabled
+// later), and trusted sources to accept the header from (pp.Trusted; without them the
+// client address in the header would never be used). While disabled, only the port
+// range and the trusted list's format are checked.
+func CheckProxyProtocol(p Paths, pp store.ProxyProtocol, streams []store.Stream) validate.Errors {
+	p.PPHTTPPort, p.PPHTTPSPort = 0, 0
+	reserved := p.ReservedPorts()
+	var errs validate.Errors
+	trusted, err := netcfg.NormalizeTrustedCIDRs(pp.Trusted)
+	if err != nil {
+		errs = append(errs, validate.FieldError{Field: "proxy_protocol.trusted", Code: "invalid", Message: err.Error()})
+	}
+	for _, f := range []struct {
+		field string
+		port  int
+	}{{"proxy_protocol.http_port", pp.HTTPPort}, {"proxy_protocol.https_port", pp.HTTPSPort}} {
+		if f.port < 1 || f.port > 65535 {
+			errs = append(errs, validate.FieldError{Field: f.field, Code: "invalid", Message: "port must be between 1 and 65535"})
+			continue
+		}
+		if !pp.Enabled {
+			continue
+		}
+		if what, ok := reserved[f.port]; ok {
+			errs = append(errs, validate.FieldError{Field: f.field, Code: "conflict", Message: fmt.Sprintf("port %d is used by Corvus (%s)", f.port, what)})
+			continue
+		}
+		for _, st := range streams {
+			if st.IncomingPort == f.port {
+				errs = append(errs, validate.FieldError{Field: f.field, Code: "conflict", Message: fmt.Sprintf("port %d is already used by stream #%d", f.port, st.ID)})
+				break
+			}
+		}
+	}
+	if !pp.Enabled {
+		return errs
+	}
+	if pp.HTTPPort == pp.HTTPSPort {
+		errs = append(errs, validate.FieldError{Field: "proxy_protocol.https_port", Code: "conflict", Message: "the HTTP and HTTPS ports must differ"})
+	}
+	if err == nil && len(trusted) == 0 {
+		errs = append(errs, validate.FieldError{Field: "proxy_protocol.trusted", Code: "required",
+			Message: "add the address of the tunnel or load balancer that sends the PROXY protocol header"})
+	}
+	return errs
 }
 
 // ReservedPorts are the container ports Corvus itself listens on: streams may not use them.
@@ -62,7 +123,8 @@ func (p Paths) ReservedPorts() map[int]string {
 		port int
 		what string
 	}{{p.HTTPPort, "HTTP"}, {p.HTTPSPort, "HTTPS"}, {p.StatusPort, "gateway status"}, {p.ACMEPort, "ACME challenges"},
-		{p.AdminPort, "admin console"}, {p.RedisPort, "access-queue store (Valkey)"}} {
+		{p.AdminPort, "admin console"}, {p.RedisPort, "access-queue store (Valkey)"},
+		{p.PPHTTPPort, "PROXY protocol HTTP"}, {p.PPHTTPSPort, "PROXY protocol HTTPS"}} {
 		if r.port > 0 {
 			out[r.port] = r.what
 		}
@@ -267,6 +329,10 @@ type mainView struct {
 	Streams    int // enabled streams; the stream {} block is rendered only when > 0
 	RateLimits []store.RateLimit
 	Unknown    store.UnknownHosts // what the HTTP default server answers (validated)
+	// PPTrusted may send a PROXY protocol header with the client address (used only
+	// with the PROXY protocol listeners, P.PPHTTPPort). Not the general trusted proxies:
+	// those are trusted for X-Forwarded-For.
+	PPTrusted []string
 }
 
 type redirectView struct {
@@ -294,6 +360,28 @@ type policyRoom struct {
 
 // Render writes a complete configuration into dir (which must not exist yet).
 func (c *Compiler) Render(ctx context.Context, s *store.Store, dir string) error {
+	network, err := s.Network(ctx)
+	if err != nil {
+		return err
+	}
+	if _, err := netcfg.NormalizeTrustedCIDRs(network.TrustedProxies); err != nil {
+		return fmt.Errorf("network settings: %w", err)
+	}
+	if !validate.RealIPHeader(network.RealIPHeader) {
+		return fmt.Errorf("network settings: invalid real IP header")
+	}
+	var ppTrusted []string
+	if network.ProxyProtocol.Enabled {
+		if err := CheckProxyProtocol(c.P, network.ProxyProtocol, nil).OrNil(); err != nil {
+			return fmt.Errorf("network settings: %w", err)
+		}
+		ppTrusted, _ = netcfg.NormalizeTrustedCIDRs(network.ProxyProtocol.Trusted)
+	}
+	// The PROXY protocol listeners are part of the rendered configuration (Paths).
+	cc := *c
+	cc.P = c.P.WithNetwork(network)
+	c = &cc
+
 	hosts, err := s.ListProxyHosts(ctx)
 	if err != nil {
 		return err
@@ -353,16 +441,6 @@ func (c *Compiler) Render(ctx context.Context, s *store.Store, dir string) error
 			}
 		}
 		aclByID[acls[i].ID] = &acls[i]
-	}
-	network, err := s.Network(ctx)
-	if err != nil {
-		return err
-	}
-	if _, err := netcfg.NormalizeTrustedCIDRs(network.TrustedProxies); err != nil {
-		return fmt.Errorf("network settings: %w", err)
-	}
-	if !validate.RealIPHeader(network.RealIPHeader) {
-		return fmt.Errorf("network settings: invalid real IP header")
 	}
 	unknown, err := s.UnknownHosts(ctx)
 	if err != nil {
@@ -504,7 +582,7 @@ func (c *Compiler) Render(ctx context.Context, s *store.Store, dir string) error
 	if err := os.WriteFile(filepath.Join(dir, "policy.json"), pj, 0o644); err != nil {
 		return err
 	}
-	return writeTemplate(filepath.Join(dir, "nginx.conf"), "nginx.conf.tmpl", mainView{Dir: slash, Name: filepath.Base(dir), P: c.P, Hosts: n, Redirects: nr, Streams: ns, RateLimits: enabledLimits, Unknown: unknown})
+	return writeTemplate(filepath.Join(dir, "nginx.conf"), "nginx.conf.tmpl", mainView{Dir: slash, Name: filepath.Base(dir), P: c.P, Hosts: n, Redirects: nr, Streams: ns, RateLimits: enabledLimits, Unknown: unknown, PPTrusted: ppTrusted})
 }
 
 // certDir returns the certificate directory for id, or "" while its files don't exist

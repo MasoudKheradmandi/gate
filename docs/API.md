@@ -383,7 +383,7 @@ tested, deployed and rolled back with the rest of the configuration.
 
 | Method | Path | Role | Description |
 |---|---|---|---|
-| GET / PUT | `/api/settings/network` | viewer / admin | Trusted proxies, real IP header, admin allowlist |
+| GET / PUT | `/api/settings/network` | viewer / admin | Trusted proxies, real IP header, admin allowlist, PROXY protocol listeners (see below) |
 | POST | `/api/settings/network/cloudflare/refresh` | admin | Refresh Cloudflare IP ranges |
 | GET / PUT | `/api/settings/sso` | admin | OIDC settings |
 | POST | `/api/settings/sso/test` | admin | Test OIDC discovery |
@@ -394,6 +394,21 @@ tested, deployed and rolled back with the rest of the configuration.
 | GET / POST | `/api/tokens` | session | API tokens (`{ "name", "role", "expires_days" }`) |
 | DELETE | `/api/tokens/{id}` | session | Revoke a token |
 | POST | `/api/import/npm/preview`, `/apply` | admin | Import from Nginx Proxy Manager (`/apply` takes `proxy_host_ids`, `redirection_host_ids`, `stream_ids`, `certificate_ids`, `access_list_ids`; omitted = all) |
+
+`PUT /api/settings/network` takes `{ "trusted_proxies": [...], "real_ip_header", "mask_ips",
+"admin_allow": [...], "proxy_protocol": { "enabled", "http_port", "https_port", "trusted": [...] } }`.
+`trusted_proxies` is always replaced (send the current list to keep it); the other fields keep
+their value when omitted. `proxy_protocol` is merged with the stored settings: each omitted field
+(and a port of `0`) keeps its value.
+
+`proxy_protocol` adds gateway listeners that expect a PROXY protocol (v1/v2) header (defaults
+`8080` / `8443`; ports 80/443 are unchanged). `trusted` lists the tunnels / load balancers whose
+header is believed (IPs or CIDRs, at least /8 for IPv4 and /16 for IPv6; field
+`proxy_protocol.trusted`, code `invalid`). It is separate from `trusted_proxies`, which are trusted
+for `X-Forwarded-For`. While enabled, the ports must differ, can't be Corvus's own ports or used by
+any stream (`422`, field `proxy_protocol.http_port` / `proxy_protocol.https_port`, code
+`conflict`), and `trusted` can't be empty (field `proxy_protocol.trusted`, code `required`).
+Streams can't use the ports while they are enabled.
 
 ### Backup and restore
 

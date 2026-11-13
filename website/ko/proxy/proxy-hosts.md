@@ -54,7 +54,7 @@ SSE(server-sent events)가 끊기지 않습니다.
 - **HTTPS로 강제 이동**은 HTTP를 HTTPS로 리디렉션하고 `Strict-Transport-Security`를 보냅니다.
 - **HTTP/2**는 HTTPS 연결에서 HTTP/2를 사용합니다.
 
-### 클라이언트 IP
+### 클라이언트 IP { #client-ip }
 
 실제 방문자 IP를 어디서 가져올지 정합니다. 규칙, 차단, Rate Limit, 로그에 이 IP를 사용합니다.
 
@@ -66,6 +66,105 @@ SSE(server-sent events)가 끊기지 않습니다.
 
 !!! warning
     신뢰 프록시를 잘못 설정하면 클라이언트가 IP를 속여 Rate Limit과 차단을 피할 수 있습니다.
+
+#### TCP 터널이나 로드 밸런서 뒤에 있을 때 (PROXY protocol) { #behind-a-tcp-tunnel-or-load-balancer-proxy-protocol }
+
+TCP 터널이나 로드 밸런서(FRP, HAProxy, 클라우드 로드 밸런서)는 연결 내용을 읽지 않고 그대로 넘기므로,
+Corvus에는 모든 방문자가 터널의 주소로 보입니다. 이런 도구는 대부분 연결 맨 앞에
+[PROXY protocol](https://www.haproxy.org/download/2.9/doc/proxy-protocol.txt) 헤더(v1 또는 v2)로
+방문자 주소를 실어 보낼 수 있고, Corvus는 별도의 포트 두 개에서 이 헤더를 받습니다.
+
+1. **네트워크** 페이지에서 **PROXY protocol 받기**를 켭니다. 포트는 기본값이 **8080**(HTTP),
+   **8443**(HTTPS)이며, Corvus가 직접 쓰는 포트나 스트림이 쓰는 포트는 고를 수 없습니다.
+2. 같은 섹션의 **신뢰할 PROXY protocol 출처**에 터널이 접속해 오는 주소를 입력합니다. 헤더는 그
+   주소에서 온 연결에서만 사용하며, 목록이 비어 있으면 설정을 켤 수 없습니다. 이 목록은 따로
+   관리됩니다. `X-Forwarded-For`를 믿을 대상인 **신뢰 프록시**에는 터널을 넣지 마세요(아래 참고).
+3. `docker-compose.yml`에서 포트를 공개합니다. 터널이 같은 호스트에서 돌면 루프백에만 공개합니다.
+
+    ```yaml
+        ports:
+          - '80:80'
+          - '443:443'
+          - '9443:9443'
+          - '127.0.0.1:8080:8080'   # PROXY protocol, HTTP
+          - '127.0.0.1:8443:8443'   # PROXY protocol, HTTPS
+    ```
+
+    터널이나 로드 밸런서가 다른 머신에 있으면 `127.0.0.1:` 없이 공개하고, 방화벽으로 그 머신의
+    주소만 이 포트에 접근하도록 막으세요.
+
+4. 터널이 PROXY protocol을 켠 채로 이 포트에 연결하도록 설정합니다.
+
+80/443 포트는 그대로라서, 내부망 방문자와 터널이 Corvus를 함께 쓸 수 있습니다. (헤더를 기다리는
+포트는 헤더 없는 연결을 거부하므로, 추가 포트는 터널만 쓰도록 하세요.)
+
+**어떤 주소를 신뢰할까.** Corvus가 보는 터널의 접속 주소를 입력합니다.
+
+- **frpc(또는 HAProxy)가 Corvus와 같은 Docker 네트워크의 컨테이너**에서 Corvus 컨테이너 이름으로
+  접속할 때: 그 컨테이너의 주소(바뀔 수 있다면 그 네트워크의 대역). 이때는 포트를 공개할 필요도
+  없습니다.
+- **frpc가 호스트에서 돌고, 위처럼 포트를 `127.0.0.1`에 공개했을 때**: Docker 브리지 게이트웨이
+  (예: `172.18.0.1`, 추가하기 전에는 **트래픽** 페이지에 클라이언트 주소로 보입니다).
+- **다른 머신의 로드 밸런서**: 그 머신의 주소.
+
+!!! warning "포트를 루프백에 공개하지 않았다면 Docker 게이트웨이를 신뢰하지 마세요"
+    모든 주소에 공개한 포트로 들어오는 외부 연결은 Docker 환경에 따라(userland proxy, ip6tables 없는
+    IPv6, Docker Desktop, rootless Docker) 브리지 게이트웨이에서 온 것처럼 보이는 경우가 많습니다.
+    그때 게이트웨이를 신뢰하면 포트에 접속할 수 있는 누구나 자기 주소를 마음대로 정할 수 있습니다.
+
+=== "FRP"
+
+    Corvus 옆 머신의 `frpc.toml`(frp 0.52 이상):
+
+    ```toml
+    [[proxies]]
+    name = "corvus-https"
+    type = "tcp"
+    localIP = "127.0.0.1"      # Corvus 호스트(또는 Corvus 컨테이너 이름)
+    localPort = 8443
+    remotePort = 443
+    transport.proxyProtocolVersion = "v2"
+
+    [[proxies]]
+    name = "corvus-http"
+    type = "tcp"
+    localIP = "127.0.0.1"
+    localPort = 8080
+    remotePort = 80
+    transport.proxyProtocolVersion = "v2"
+    ```
+
+=== "HAProxy"
+
+    ```
+    frontend https_in
+        mode tcp
+        bind :443
+        default_backend corvus_https
+
+    backend corvus_https
+        mode tcp
+        server corvus 192.168.1.10:8443 send-proxy-v2
+    ```
+
+TLS는 여전히 Corvus에서 처리하므로 인증서(HTTP 포트를 통한 Let's Encrypt HTTP-01 포함)는 평소처럼
+동작합니다.
+
+헤더의 주소는 **직접 연결**로 설정한 호스트, 리디렉션 호스트, 알 수 없는 호스트에 쓰입니다.
+**Cloudflare**나 **신뢰 프록시**로 설정한 호스트는 터널을 거쳐 와도 계속 각자의 규칙대로 헤더에서
+주소를 읽습니다. 터널이 직접 `X-Forwarded-For`를 붙이는 경우가 아니라면 이런 호스트를 위해 터널을
+**신뢰 프록시**에 넣지 마세요. 터널은 방문자가 보낸 헤더를 그대로 넘기므로, 터널을 신뢰하면 방문자가
+자기 주소를 마음대로 정할 수 있습니다. 터널 앞에 Cloudflare가 있다면 호스트를 **신뢰 프록시**와
+`CF-Connecting-IP` 헤더로 설정하고, 터널의 공개 포트가 Cloudflare 주소에서 오는 연결만 받을 때(터널
+서버의 방화벽)에만 터널을 **신뢰 프록시**에 추가하세요.
+
+!!! note "실제 IP 지시어가 있는 고급 설정"
+    PROXY protocol이 켜져 있으면 Corvus가 모든 서버에 `set_real_ip_from`과 `real_ip_header`를
+    설정합니다. 고급 설정에서 둘 중 하나만(`real_ip_header`만, 또는 `set_real_ip_from`만) 지정하면
+    나머지 하나는 Corvus의 설정과 합쳐집니다. 둘 다 지정하거나 둘 다 빼세요.
+
+!!! note
+    [스트림](streams.md)은 아직 PROXY protocol을 받지 않습니다.
 
 ### 보호
 
